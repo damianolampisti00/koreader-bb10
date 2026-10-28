@@ -15,7 +15,7 @@ rm -rf "$STAGE" && mkdir -p "$STAGE"
 # 1. KOReader, dereferenced, minus what we don't ship (yet): sources of translations, tests,
 #    duplicate fonts, and most of the Noto fonts.
 excludes=(--exclude='*.dbg' --exclude=koreader/l10n --exclude=koreader/resources/fonts
-          --exclude=koreader/spec --exclude=koreader/fonts/freefont --exclude=koreader/koreader.sh)
+          --exclude=koreader/spec --exclude=koreader/koreader.sh)
 for f in "$TREE"/fonts/noto/*; do
     case ${f##*/} in NotoSans-*|NotoSerif-*) ;; *) excludes+=("--exclude=koreader/fonts/noto/${f##*/}") ;; esac
 done
