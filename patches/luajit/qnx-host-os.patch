@@ -1,0 +1,21 @@
+diff --git a/src/Makefile b/src/Makefile
+index 0e45976a..3bb749d2 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -375,12 +375,16 @@ ifneq ($(HOST_SYS),$(TARGET_SYS))
+   else
+   ifeq (iOS,$(TARGET_SYS))
+     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OSX -DLUAJIT_TARGET_IPHONE=1
++  else
++  ifeq (QNX,$(TARGET_SYS))
++    HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_POSIX -DLJ_TARGET_QNX=1
+   else
+     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OTHER
+   endif
+   endif
+   endif
+   endif
++  endif
+ endif
+ 
+ ifneq (,$(CCDEBUG))

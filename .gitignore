@@ -1,0 +1,7 @@
+# downloaded / generated, not versioned
+/dl/
+/tc/
+/src/
+/luajit/
+/out/
+/tests/cxx17/smoke
