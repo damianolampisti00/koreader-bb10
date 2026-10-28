@@ -1,0 +1,36 @@
+From 7d8b31999ec861e64b31d025c343ddee46e5b8bd Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 00:45:00 +0100
+Subject: [PATCH 7/7] Menu: item shortcuts work with a keyboard but no D-pad
+
+The shortcut icons are shown when the device has a keyboard, but the
+keys were only bound with a D-pad (BlackBerry Q10: keyboard, no D-pad).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ frontend/ui/widget/menu.lua | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/frontend/ui/widget/menu.lua b/frontend/ui/widget/menu.lua
+index e3e426c0e..665e222bc 100644
+--- a/frontend/ui/widget/menu.lua
++++ b/frontend/ui/widget/menu.lua
+@@ -989,10 +989,11 @@ function Menu:init()
+             -- add long press on "Right" key
+             self.key_events.Right = { { "Right" } }
+         end
+-        -- shortcut icon is not needed for touch device
+-        if self.is_enable_shortcut then
+-            self.key_events.SelectByShortCut = { { self.item_shortcuts } }
+-        end
++    end
++    -- Shortcut icons are shown whenever there's a keyboard (even without a D-pad,
++    -- e.g. the BlackBerry Q10): make them work too.
++    if self.is_enable_shortcut then
++        self.key_events.SelectByShortCut = { { self.item_shortcuts } }
+     end
+ 
+     if self.item_table.current then
+-- 
+2.56.0
+
