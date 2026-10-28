@@ -1,0 +1,1569 @@
+From 4aa96dd8b3cd5335f3cb9e406c3d3beb882ba987 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:02:36 +0100
+Subject: [PATCH 2/4] ffi/posix_h: add qnx_arm (BlackBerry 10)
+
+Generated with ffi-cdecl against the BB10 NDK headers (GCC 9.3 cross
+compiler); LuaJIT reports QNX as ffi.os == "POSIX".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ cmake/CMakeLists.txt          |   3 +
+ ffi-cdecl/posix_cdecl.c       |  55 +++-
+ ffi-cdecl/posix_h_.lua        |   3 +
+ ffi-cdecl/posix_h_qnx_arm.lua | 547 ++++++++++++++++++++++++++++++++++
+ ffi/posix_h.lua               | 381 +++++++++++++++++++----
+ 5 files changed, 920 insertions(+), 69 deletions(-)
+ create mode 100644 ffi-cdecl/posix_h_qnx_arm.lua
+
+diff --git a/cmake/CMakeLists.txt b/cmake/CMakeLists.txt
+index d820ce3f..a967bcaf 100644
+--- a/cmake/CMakeLists.txt
++++ b/cmake/CMakeLists.txt
+@@ -787,6 +787,7 @@ set(VERSIONS
+     android_arm android_arm64 android_x86 android_x64
+     linux_arm linux_arm64 linux_x64
+     macos
++    qnx_arm
+ )
+ add_custom_target(
+     posix-ffi
+@@ -810,6 +811,8 @@ if(ANDROID)
+     set(POSIX_PLATFORM android_${LUAJIT_ARCH})
+ elseif(APPLE)
+     set(POSIX_PLATFORM macos)
++elseif(BB10)
++    set(POSIX_PLATFORM qnx_${LUAJIT_ARCH})
+ else()
+     set(POSIX_PLATFORM linux_${LUAJIT_ARCH})
+ endif()
+diff --git a/ffi-cdecl/posix_cdecl.c b/ffi-cdecl/posix_cdecl.c
+index a1832ad3..35e5fce0 100644
+--- a/ffi-cdecl/posix_cdecl.c
++++ b/ffi-cdecl/posix_cdecl.c
+@@ -17,6 +17,9 @@
+ # define __const const
+ // `basename(…)` if macro for `__xpg_basename(…)`.
+ # define __xpg_basename  basename
++#elif defined(__QNX__)
++// <sys/resource.h> needs `struct timeval`.
++# include <sys/time.h>
+ #endif
+ 
+ #include <libgen.h>
+@@ -117,6 +120,15 @@ cdecl_type_replace(__syscall_slong_t, long);
+ # if __WORDSIZE == 32
+ cdecl_type_replace(__u_quad_t, unsigned long long);
+ # endif
++#elif defined(__QNX__)
++cdecl_type_replace(_Int8t, int8_t);
++cdecl_type_replace(_Int16t, int16_t);
++cdecl_type_replace(_Int32t, int32_t);
++cdecl_type_replace(_Int64t, int64_t);
++cdecl_type_replace(_Uint8t, uint8_t);
++cdecl_type_replace(_Uint16t, uint16_t);
++cdecl_type_replace(_Uint32t, uint32_t);
++cdecl_type_replace(_Uint64t, uint64_t);
+ #endif
+ 
+ cdecl_const(EAGAIN);
+@@ -173,6 +185,10 @@ cdecl_const(PATH_MAX);
+ # if !defined(CLOCK_BOOTTIME)
+ #  define CLOCK_BOOTTIME  7
+ # endif
++#elif defined(__QNX__)
++# define CLOCK_BOOTTIME          -1 // not available
++# define CLOCK_MONOTONIC_COARSE  CLOCK_MONOTONIC
++# define CLOCK_REALTIME_COARSE   CLOCK_REALTIME
+ #endif
+ 
+ cdecl_const(CLOCK_BOOTTIME);
+@@ -191,6 +207,8 @@ cdecl_out(type_clockid_t, typedef unsigned clockid_t;);
+ #elif defined(__linux__)
+ cdecl_type_replace(__clockid_t, clockid_t);
+ cdecl_type(__clockid_t);
++#elif defined(__QNX__)
++cdecl_type(clockid_t);
+ #endif
+ 
+ cdecl_const(FIONREAD);
+@@ -219,6 +237,10 @@ cdecl_type_replace(__useconds_t, useconds_t);
+ cdecl_type(__suseconds_t);
+ cdecl_type(__time_t);
+ cdecl_type(__useconds_t);
++#elif defined(__QNX__)
++cdecl_type(suseconds_t);
++cdecl_type(time_t);
++cdecl_type(useconds_t);
+ #endif
+ 
+ cdecl_struct(timeval);
+@@ -270,6 +292,15 @@ cdecl_type(__mode_t);
+ cdecl_type(__off_t);
+ cdecl_type(__pid_t);
+ cdecl_type(__uid_t);
++#elif defined(__QNX__)
++cdecl_type(blkcnt_t);
++cdecl_type(blksize_t);
++cdecl_type(id_t);
++cdecl_type(mode_t);
++cdecl_type(_Offt);
++cdecl_type(off_t);
++cdecl_type(pid_t);
++cdecl_type(uid_t);
+ #endif
+ 
+ #if defined(__ANDROID__)
+@@ -285,6 +316,9 @@ cdecl_type_replace(__fsblkcnt_t, fsblkcnt_t);
+ cdecl_type_replace(__fsfilcnt_t, fsfilcnt_t);
+ cdecl_type(__fsblkcnt_t);
+ cdecl_type(__fsfilcnt_t);
++#elif defined(__QNX__)
++cdecl_type(fsblkcnt_t);
++cdecl_type(fsfilcnt_t);
+ #endif
+ 
+ cdecl_struct(statvfs);
+@@ -306,7 +340,7 @@ cdecl_const(AF_UNIX);
+ cdecl_const(NI_MAXHOST);
+ cdecl_const(NI_NUMERICHOST);
+ 
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__QNX__)
+ # define SOCK_CLOEXEC   0 // not available
+ # define SOCK_NONBLOCK  0 // not available
+ #endif
+@@ -322,6 +356,8 @@ cdecl_type(caddr_t);
+ #elif defined(__linux__)
+ cdecl_type_replace(__caddr_t, caddr_t);
+ cdecl_type(__caddr_t);
++#elif defined(__QNX__)
++cdecl_type(caddr_t);
+ #endif
+ 
+ cdecl_type(in_addr_t);
+@@ -332,7 +368,7 @@ cdecl_type_replace(__kernel_sa_family_t, sa_family_t);
+ cdecl_type(__kernel_sa_family_t);
+ #elif defined(__APPLE__)
+ cdecl_type(sa_family_t);
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__QNX__)
+ cdecl_type(sa_family_t);
+ #endif
+ 
+@@ -342,6 +378,8 @@ cdecl_type(__darwin_socklen_t);
+ #elif defined(__linux__)
+ cdecl_type_replace(__socklen_t, socklen_t);
+ cdecl_type(__socklen_t);
++#elif defined(__QNX__)
++cdecl_type(socklen_t);
+ #endif
+ 
+ cdecl_struct(in_addr);
+@@ -414,6 +452,9 @@ cdecl_union(pthread_attr_t);
+ # endif
+ cdecl_type(pthread_attr_t);
+ cdecl_type(pthread_t);
++#elif defined(__QNX__)
++cdecl_type(pthread_attr_t);
++cdecl_type(pthread_t);
+ #endif
+ 
+ cdecl_func(pthread_attr_destroy);
+@@ -498,7 +539,7 @@ cdecl_func(fread);
+ cdecl_func(fwrite);
+ cdecl_func(sprintf);
+ 
+-#if !defined(__APPLE__)
++#if !defined(__APPLE__) && !defined(__QNX__)
+ # if !defined(__ANDROID__)
+ cdecl_type_replace(__off_t, off_t);
+ # endif
+@@ -609,16 +650,20 @@ cdecl_type_replace(__timezone_ptr_t, struct timezone *);
+ cdecl_func(gettimeofday);
+ cdecl_func(settimeofday);
+ 
++#if !defined(__QNX__)
++
+ cdecl_const(PRIO_PROCESS);
+ cdecl_const(PRIO_PGRP);
+ cdecl_const(PRIO_USER);
+ 
+-#if defined(__linux__) && !defined(__ANDROID__)
++# if defined(__linux__) && !defined(__ANDROID__)
+ cdecl_type_replace(__priority_which_t, int);
+-#endif
++# endif
+ 
+ cdecl_func(setpriority);
+ 
++#endif
++
+ cdecl_const(TCIFLUSH);
+ 
+ cdecl_func(tcdrain);
+diff --git a/ffi-cdecl/posix_h_.lua b/ffi-cdecl/posix_h_.lua
+index bff3ea35..6bf23fc9 100644
+--- a/ffi-cdecl/posix_h_.lua
++++ b/ffi-cdecl/posix_h_.lua
+@@ -7,6 +7,9 @@ if os.getenv("IS_ANDROID") then
+     platform_str = "android_" .. ffi.arch
+ elseif ffi.os == "OSX" then
+     platform_str = "macos"
++elseif ffi.os == "POSIX" then
++    -- LuaJIT reports QNX (BlackBerry 10) as a generic POSIX OS.
++    platform_str = "qnx_" .. ffi.arch
+ else
+     platform_str = ffi.os:lower() .. "_" .. ffi.arch
+ end
+diff --git a/ffi-cdecl/posix_h_qnx_arm.lua b/ffi-cdecl/posix_h_qnx_arm.lua
+new file mode 100644
+index 00000000..4de499c1
+--- /dev/null
++++ b/ffi-cdecl/posix_h_qnx_arm.lua
+@@ -0,0 +1,547 @@
++-- Automatically generated with ffi-cdecl.
++
++require("ffi").cdef[[
++// cdecl_const_EAGAIN
++static const unsigned EAGAIN = 11;
++// cdecl_const_EINTR
++static const unsigned EINTR = 4;
++// cdecl_const_EINVAL
++static const unsigned EINVAL = 22;
++// cdecl_const_ENODEV
++static const unsigned ENODEV = 19;
++// cdecl_const_ENOSYS
++static const unsigned ENOSYS = 89;
++// cdecl_const_EPERM
++static const unsigned EPERM = 1;
++// cdecl_const_EPIPE
++static const unsigned EPIPE = 32;
++// cdecl_const_ETIME
++static const unsigned ETIME = 62;
++// cdecl_const_ETIMEDOUT
++static const unsigned ETIMEDOUT = 260;
++// cdecl_const_O_APPEND
++static const unsigned O_APPEND = 8;
++// cdecl_const_O_CLOEXEC
++static const unsigned O_CLOEXEC = 8192;
++// cdecl_const_O_CREAT
++static const unsigned O_CREAT = 256;
++// cdecl_const_O_NONBLOCK
++static const unsigned O_NONBLOCK = 128;
++// cdecl_const_O_RDONLY
++static const unsigned O_RDONLY = 0;
++// cdecl_const_O_RDWR
++static const unsigned O_RDWR = 2;
++// cdecl_const_O_TRUNC
++static const unsigned O_TRUNC = 512;
++// cdecl_const_O_WRONLY
++static const unsigned O_WRONLY = 1;
++// cdecl_const_F_OK
++static const unsigned F_OK = 0;
++// cdecl_const_R_OK
++static const unsigned R_OK = 4;
++// cdecl_const_W_OK
++static const unsigned W_OK = 2;
++// cdecl_const_X_OK
++static const unsigned X_OK = 1;
++// cdecl_const_S_IRGRP
++static const unsigned S_IRGRP = 32;
++// cdecl_const_S_IROTH
++static const unsigned S_IROTH = 4;
++// cdecl_const_S_IRUSR
++static const unsigned S_IRUSR = 256;
++// cdecl_const_S_IRWXG
++static const unsigned S_IRWXG = 56;
++// cdecl_const_S_IRWXO
++static const unsigned S_IRWXO = 7;
++// cdecl_const_S_IRWXU
++static const unsigned S_IRWXU = 448;
++// cdecl_const_S_IWGRP
++static const unsigned S_IWGRP = 16;
++// cdecl_const_S_IWOTH
++static const unsigned S_IWOTH = 2;
++// cdecl_const_S_IWUSR
++static const unsigned S_IWUSR = 128;
++// cdecl_const_S_IXGRP
++static const unsigned S_IXGRP = 8;
++// cdecl_const_S_IXOTH
++static const unsigned S_IXOTH = 1;
++// cdecl_const_S_IXUSR
++static const unsigned S_IXUSR = 64;
++// cdecl_const_SEEK_CUR
++static const unsigned SEEK_CUR = 1;
++// cdecl_const_SEEK_END
++static const unsigned SEEK_END = 2;
++// cdecl_const_SEEK_SET
++static const unsigned SEEK_SET = 0;
++// cdecl_const_PATH_MAX
++static const unsigned PATH_MAX = 1024;
++// cdecl_const_CLOCK_BOOTTIME
++static const int CLOCK_BOOTTIME = -1;
++// cdecl_const_CLOCK_MONOTONIC
++static const unsigned CLOCK_MONOTONIC = 2;
++// cdecl_const_CLOCK_MONOTONIC_COARSE
++static const unsigned CLOCK_MONOTONIC_COARSE = 2;
++// cdecl_const_CLOCK_REALTIME
++static const unsigned CLOCK_REALTIME = 0;
++// cdecl_const_CLOCK_REALTIME_COARSE
++static const unsigned CLOCK_REALTIME_COARSE = 0;
++// cdecl_type_clockid_t
++typedef int clockid_t;
++// cdecl_const_FIONREAD
++static const unsigned FIONREAD = 1074030207;
++// cdecl_type_suseconds_t
++typedef int32_t suseconds_t;
++// cdecl_type_time_t
++typedef uint32_t time_t;
++// cdecl_type_useconds_t
++typedef uint32_t useconds_t;
++// cdecl_struct_timeval
++struct timeval {
++  time_t tv_sec;
++  suseconds_t tv_usec;
++};
++// cdecl_struct_timespec
++struct timespec {
++  time_t tv_sec;
++  long tv_nsec;
++};
++// cdecl_type_blkcnt_t
++typedef uint32_t blkcnt_t;
++// cdecl_type_blksize_t
++typedef uint32_t blksize_t;
++// cdecl_type_id_t
++typedef int id_t;
++// cdecl_type_mode_t
++typedef uint32_t mode_t;
++// cdecl_type__Offt
++typedef int32_t _Offt;
++// cdecl_type_off_t
++typedef _Offt off_t;
++// cdecl_type_pid_t
++typedef int pid_t;
++// cdecl_type_uid_t
++typedef int uid_t;
++// cdecl_type_fsblkcnt_t
++typedef uint32_t fsblkcnt_t;
++// cdecl_type_fsfilcnt_t
++typedef uint32_t fsfilcnt_t;
++// cdecl_struct_statvfs
++struct statvfs {
++  unsigned long f_bsize;
++  unsigned long f_frsize;
++  fsblkcnt_t f_blocks;
++  fsblkcnt_t f_blocks_hi;
++  fsblkcnt_t f_bfree;
++  fsblkcnt_t f_bfree_hi;
++  fsblkcnt_t f_bavail;
++  fsblkcnt_t f_bavail_hi;
++  fsfilcnt_t f_files;
++  fsfilcnt_t f_files_hi;
++  fsfilcnt_t f_ffree;
++  fsfilcnt_t f_ffree_hi;
++  fsfilcnt_t f_favail;
++  fsfilcnt_t f_favail_hi;
++  unsigned long f_fsid;
++  char f_basetype[16];
++  unsigned long f_flag;
++  unsigned long f_namemax;
++  unsigned long f_filler[21];
++};
++// cdecl_const_AF_INET
++static const unsigned AF_INET = 2;
++// cdecl_const_AF_INET6
++static const unsigned AF_INET6 = 24;
++// cdecl_const_AF_UNIX
++static const unsigned AF_UNIX = 1;
++// cdecl_const_NI_MAXHOST
++static const unsigned NI_MAXHOST = 1025;
++// cdecl_const_NI_NUMERICHOST
++static const unsigned NI_NUMERICHOST = 2;
++// cdecl_const_SOCK_CLOEXEC
++static const unsigned SOCK_CLOEXEC = 0;
++// cdecl_const_SOCK_DGRAM
++static const unsigned SOCK_DGRAM = 2;
++// cdecl_const_SOCK_NONBLOCK
++static const unsigned SOCK_NONBLOCK = 0;
++// cdecl_const_SOCK_RAW
++static const unsigned SOCK_RAW = 3;
++// cdecl_const_SOCK_SEQPACKET
++static const unsigned SOCK_SEQPACKET = 5;
++// cdecl_type_caddr_t
++typedef char *caddr_t;
++// cdecl_type_in_addr_t
++typedef uint32_t in_addr_t;
++// cdecl_type_in_port_t
++typedef uint16_t in_port_t;
++// cdecl_type_sa_family_t
++typedef uint8_t sa_family_t;
++// cdecl_type_socklen_t
++typedef uint32_t socklen_t;
++// cdecl_struct_in_addr
++struct in_addr {
++  in_addr_t s_addr;
++} __attribute__((__packed__)) ;
++// cdecl_struct_in6_addr
++struct in6_addr {
++  union {
++    uint8_t __u6_addr8[16];
++    uint16_t __u6_addr16[8];
++    uint32_t __u6_addr32[4];
++  } __u6_addr;
++};
++// cdecl_struct_sockaddr
++struct sockaddr {
++  uint8_t sa_len;
++  sa_family_t sa_family;
++  char sa_data[14];
++};
++// cdecl_struct_sockaddr_in
++struct sockaddr_in {
++  uint8_t sin_len;
++  sa_family_t sin_family;
++  in_port_t sin_port;
++  struct in_addr sin_addr;
++  int8_t sin_zero[8];
++};
++// cdecl_struct_sockaddr_in6
++struct sockaddr_in6 {
++  uint8_t sin6_len;
++  sa_family_t sin6_family;
++  in_port_t sin6_port;
++  uint32_t sin6_flowinfo;
++  struct in6_addr sin6_addr;
++  uint32_t sin6_scope_id;
++};
++// cdecl_struct_sockaddr_un
++struct sockaddr_un {
++  uint8_t sun_len;
++  sa_family_t sun_family;
++  char sun_path[104];
++};
++// cdecl_struct_sockaddr_storage
++struct sockaddr_storage {
++  uint8_t ss_len;
++  sa_family_t ss_family;
++  char __ss_pad1[((sizeof (int64_t)) - 2)];
++  int64_t __ss_align;
++  char __ss_pad2[(128 - 2 - ((sizeof (int64_t)) - 2) - (sizeof (int64_t)))];
++};
++// cdecl_struct_ifaddrs
++struct ifaddrs {
++  struct ifaddrs *ifa_next;
++  char *ifa_name;
++  u_int ifa_flags;
++  struct sockaddr *ifa_addr;
++  struct sockaddr *ifa_netmask;
++  struct sockaddr *ifa_dstaddr;
++  void *ifa_data;
++};
++// cdecl_struct_ifreq
++struct ifreq {
++  char ifr_name[16];
++  union {
++    struct sockaddr ifru_addr;
++    struct sockaddr ifru_dstaddr;
++    struct sockaddr ifru_broadaddr;
++    struct sockaddr_storage ifru_space;
++    int ifru_flags;
++    int ifru_metric;
++    int ifru_mtu;
++    int ifru_dlt;
++    unsigned ifru_value;
++    void *ifru_data;
++    struct {
++      uint32_t b_buflen;
++      void *b_buf;
++    } ifru_b;
++    int ifru_fibmask;
++  } ifr_ifru;
++};
++// cdecl_type_nfds_t
++typedef unsigned nfds_t;
++// cdecl_type_mqd_t
++typedef int mqd_t;
++// cdecl_func_mq_close
++int mq_close(mqd_t);
++// cdecl_func_mq_open
++mqd_t mq_open(const char *, int, ...);
++// cdecl_func_mq_receive
++ssize_t mq_receive(mqd_t, char *, size_t, unsigned *);
++// cdecl_const_PTHREAD_CREATE_DETACHED
++static const unsigned PTHREAD_CREATE_DETACHED = 1;
++// cdecl_type_pthread_attr_t
++typedef struct _thread_attr pthread_attr_t;
++// cdecl_type_pthread_t
++typedef int32_t pthread_t;
++// cdecl_func_pthread_attr_destroy
++int pthread_attr_destroy(pthread_attr_t *);
++// cdecl_func_pthread_attr_init
++int pthread_attr_init(pthread_attr_t *);
++// cdecl_func_pthread_attr_setdetachstate
++int pthread_attr_setdetachstate(pthread_attr_t *, int);
++// cdecl_func_pthread_create
++int pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
++// cdecl_const_POLLERR
++static const unsigned POLLERR = 32;
++// cdecl_const_POLLHUP
++static const unsigned POLLHUP = 64;
++// cdecl_const_POLLIN
++static const unsigned POLLIN = 5;
++// cdecl_const_POLLOUT
++static const unsigned POLLOUT = 2;
++// cdecl_struct_pollfd
++struct pollfd {
++  int fd;
++  short events;
++  short revents;
++};
++// cdecl_func_poll
++int poll(struct pollfd *, nfds_t, int);
++// cdecl_func_calloc
++void *calloc(size_t, size_t);
++// cdecl_func_free
++void free(void *);
++// cdecl_func_malloc
++void *malloc(size_t);
++// cdecl_func_mkdtemp
++char *mkdtemp(char *);
++// cdecl_func_realloc
++void *realloc(void *, size_t);
++// cdecl_func_realpath
++char *realpath(const char *, char *);
++// cdecl_func_setenv
++int setenv(const char *, const char *, int);
++// cdecl_func_unsetenv
++int unsetenv(const char *);
++// cdecl_func_unlockpt
++int unlockpt(int);
++// cdecl_func_grantpt
++int grantpt(int);
++// cdecl_func_ptsname
++char *ptsname(int);
++// cdecl_func_basename
++char *basename(char *);
++// cdecl_func_dirname
++char *dirname(char *);
++// cdecl_const_F_SETFD
++static const unsigned F_SETFD = 2;
++// cdecl_const_F_GETFL
++static const unsigned F_GETFL = 3;
++// cdecl_const_F_SETFL
++static const unsigned F_SETFL = 4;
++// cdecl_const_FD_CLOEXEC
++static const unsigned FD_CLOEXEC = 1;
++// cdecl_func_fcntl
++int fcntl(int, int, ...);
++// cdecl_func_open
++int open(const char *, int, ...);
++// cdecl_const_HAVE_POSIX_FALLOCATE
++static const unsigned HAVE_POSIX_FALLOCATE = 0;
++// cdecl_type_FILE
++typedef struct _IO_FILE FILE;
++// cdecl_func_fclose
++int fclose(FILE *);
++// cdecl_func_ferror
++int ferror(FILE *);
++// cdecl_func_fflush
++int fflush(FILE *);
++// cdecl_func_fileno
++int fileno(FILE *);
++// cdecl_func_fopen
++FILE *fopen(const char *, const char *);
++// cdecl_func_fputs
++int fputs(const char *, FILE *);
++// cdecl_func_fread
++size_t fread(void *, size_t, size_t, FILE *);
++// cdecl_func_fwrite
++size_t fwrite(const void *, size_t, size_t, FILE *);
++// cdecl_func_sprintf
++int sprintf(char *, const char *, ...);
++int sprintf(char *, const char *, ...);
++// cdecl_func__exit
++void _exit(int);
++// cdecl_func_access
++int access(const char *, int);
++// cdecl_func_close
++int close(int);
++// cdecl_func_dup2
++int dup2(int, int);
++// cdecl_func_execl
++int execl(const char *, const char *, ...);
++// cdecl_func_execlp
++int execlp(const char *, const char *, ...);
++// cdecl_func_execvp
++int execvp(const char *, char *const[]);
++// cdecl_func_fdatasync
++int fdatasync(int);
++// cdecl_func_fork
++pid_t fork(void);
++// cdecl_func_fsync
++int fsync(int);
++// cdecl_func_ftruncate
++int ftruncate(int, off_t);
++// cdecl_func_getpid
++pid_t getpid(void);
++// cdecl_func_getppid
++pid_t getppid(void);
++// cdecl_func_getuid
++uid_t getuid(void);
++// cdecl_func_lseek
++off_t lseek(int, off_t, int);
++// cdecl_func_pause
++int pause(void);
++// cdecl_func_pipe
++int pipe(int[2]);
++// cdecl_func_read
++ssize_t read(int, void *, size_t);
++// cdecl_func_setpgid
++int setpgid(pid_t, pid_t);
++// cdecl_func_setsid
++pid_t setsid(void);
++// cdecl_func_sleep
++unsigned sleep(unsigned);
++// cdecl_func_usleep
++int usleep(useconds_t);
++// cdecl_func_write
++ssize_t write(int, const void *, size_t);
++// cdecl_func_memchr
++void *memchr(const void *, int, size_t);
++// cdecl_func_memcmp
++int memcmp(const void *, const void *, size_t);
++// cdecl_func_memmove
++void *memmove(void *, const void *, size_t);
++void *memmove(void *, const void *, size_t);
++// cdecl_func_strcasecmp
++int strcasecmp(const char *, const char *);
++// cdecl_func_strcmp
++int strcmp(const char *, const char *);
++// cdecl_func_strcoll
++int strcoll(const char *, const char *);
++// cdecl_func_strdup
++char *strdup(const char *);
++// cdecl_func_strerror
++char *strerror(int);
++// cdecl_func_strncasecmp
++int strncasecmp(const char *, const char *, size_t);
++// cdecl_func_strnlen
++size_t strnlen(const char *, size_t);
++// cdecl_const_SIGTERM
++static const unsigned SIGTERM = 15;
++// cdecl_func_kill
++int kill(pid_t, int);
++// cdecl_const_IFNAMSIZ
++static const unsigned IFNAMSIZ = 16;
++// cdecl_const_IFF_LOOPBACK
++static const unsigned IFF_LOOPBACK = 8;
++// cdecl_const_IFF_UP
++static const unsigned IFF_UP = 1;
++// cdecl_const_IPPROTO_IP
++static const unsigned IPPROTO_IP = 0;
++// cdecl_const_IPPROTO_ICMP
++static const unsigned IPPROTO_ICMP = 1;
++// cdecl_const_RTF_GATEWAY
++static const unsigned RTF_GATEWAY = 2;
++// cdecl_const_RTF_UP
++static const unsigned RTF_UP = 1;
++// cdecl_func_connect
++int connect(int, const struct sockaddr *, socklen_t);
++// cdecl_func_recv
++ssize_t recv(int, void *, size_t, int);
++// cdecl_func_send
++ssize_t send(int, const void *, size_t, int);
++// cdecl_func_sendto
++ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *, socklen_t);
++// cdecl_func_socket
++int socket(int, int, int);
++// cdecl_func_gai_strerror
++const char *gai_strerror(int);
++// cdecl_func_getnameinfo
++int getnameinfo(const struct sockaddr *, socklen_t, char *, socklen_t, char *, socklen_t, int);
++// cdecl_func_inet_aton
++int inet_aton(const char *, struct in_addr *);
++// cdecl_func_statvfs
++int statvfs(const char *, struct statvfs *);
++// cdecl_const_WNOHANG
++static const unsigned WNOHANG = 64;
++// cdecl_func_waitpid
++pid_t waitpid(pid_t, int *, int);
++// cdecl_const_MAP_ANONYMOUS
++static const unsigned MAP_ANONYMOUS = 524288;
++// cdecl_const_MAP_FAILED
++static const int MAP_FAILED = -1;
++// cdecl_const_MAP_SHARED
++static const unsigned MAP_SHARED = 1;
++// cdecl_const_PROT_READ
++static const unsigned PROT_READ = 256;
++// cdecl_const_PROT_WRITE
++static const unsigned PROT_WRITE = 512;
++// cdecl_func_mmap
++void *mmap(void *, size_t, int, int, int, off_t);
++// cdecl_func_munmap
++int munmap(void *, size_t);
++// cdecl_struct_tm
++struct tm {
++  int tm_sec;
++  int tm_min;
++  int tm_hour;
++  int tm_mday;
++  int tm_mon;
++  int tm_year;
++  int tm_wday;
++  int tm_yday;
++  int tm_isdst;
++  long tm_gmtoff;
++  const char *tm_zone;
++};
++// cdecl_func_clock_getres
++int clock_getres(clockid_t, struct timespec *);
++// cdecl_func_clock_gettime
++int clock_gettime(clockid_t, struct timespec *);
++// cdecl_func_gmtime
++struct tm *gmtime(const time_t *);
++// cdecl_func_gmtime_r
++struct tm *gmtime_r(const time_t *, struct tm *);
++// cdecl_func_localtime
++struct tm *localtime(const time_t *);
++// cdecl_func_strftime
++size_t strftime(char *, size_t, const char *, const struct tm *);
++// cdecl_func_time
++time_t time(time_t *);
++// cdecl_func_timegm
++time_t timegm(struct tm *);
++// cdecl_struct_timezone
++struct timezone {
++  int tz_minuteswest;
++  int tz_dsttime;
++};
++// cdecl_func_gettimeofday
++int gettimeofday(struct timeval *, void *);
++// cdecl_func_settimeofday
++int settimeofday(const struct timeval *, const void *);
++// cdecl_const_TCIFLUSH
++static const unsigned TCIFLUSH = 0;
++// cdecl_func_tcdrain
++int tcdrain(int);
++// cdecl_func_tcflush
++int tcflush(int, int);
++// cdecl_func_htonl
++uint32_t htonl(uint32_t);
++// cdecl_func_htons
++uint16_t htons(uint16_t);
++// cdecl_func_ntohl
++uint32_t ntohl(uint32_t);
++// cdecl_func_ntohs
++uint16_t ntohs(uint16_t);
++// cdecl_func_freeifaddrs
++void freeifaddrs(struct ifaddrs *);
++// cdecl_func_getifaddrs
++int getifaddrs(struct ifaddrs **);
++// cdecl_func_ioctl
++int ioctl(int, int, ...);
++// cdecl_const_ICMP_ECHO
++static const unsigned ICMP_ECHO = 8;
++// cdecl_const_ICMP_ECHOREPLY
++static const unsigned ICMP_ECHOREPLY = 0;
++// cdecl_const_ICMP_MINLEN
++static const unsigned ICMP_MINLEN = 8;
++]]
+diff --git a/ffi/posix_h.lua b/ffi/posix_h.lua
+index 2d35dcb8..8552879a 100644
+--- a/ffi/posix_h.lua
++++ b/ffi/posix_h.lua
+@@ -7,10 +7,13 @@ if os.getenv("IS_ANDROID") then
+     platform_str = "android_" .. ffi.arch
+ elseif ffi.os == "OSX" then
+     platform_str = "macos"
++elseif ffi.os == "POSIX" then
++    -- LuaJIT reports QNX (BlackBerry 10) as a generic POSIX OS.
++    platform_str = "qnx_" .. ffi.arch
+ else
+     platform_str = ffi.os:lower() .. "_" .. ffi.arch
+ end
+-local platform = ({ android_arm=0x1, android_arm64=0x2, android_x64=0x4, android_x86=0x8, linux_arm=0x10, linux_arm64=0x20, linux_x64=0x40, macos=0x80 })[platform_str]
++local platform = ({ android_arm=0x1, android_arm64=0x2, android_x64=0x4, android_x86=0x8, linux_arm=0x10, linux_arm64=0x20, linux_x64=0x40, macos=0x80, qnx_arm=0x100 })[platform_str]
+ if not platform then
+     error("unsupported platform: " .. platform_str)
+ end
+@@ -23,7 +26,7 @@ if ffi.os == "Linux" then
+     pcall(ffi.load, "rt.so.1", true)
+ end
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
+ ffi.cdef[[ static const unsigned EAGAIN = 11; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned EAGAIN = 35; ]]
+@@ -39,6 +42,8 @@ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|
+ ffi.cdef[[ static const unsigned ENOSYS = 38; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned ENOSYS = 78; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ static const unsigned ENOSYS = 89; ]]
+ end
+ 
+ ffi.cdef[[
+@@ -46,24 +51,44 @@ static const unsigned EPERM = 1;
+ static const unsigned EPIPE = 32;
+ ]]
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
++ffi.cdef[[ static const unsigned ETIME = 62; ]]
++elseif --[[ macos ]] platform == 0x80 then
++ffi.cdef[[ static const unsigned ETIME = 101; ]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++ffi.cdef[[ static const unsigned ETIMEDOUT = 110; ]]
++elseif --[[ macos ]] platform == 0x80 then
++ffi.cdef[[ static const unsigned ETIMEDOUT = 60; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ static const unsigned ETIMEDOUT = 260; ]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++ffi.cdef[[ static const unsigned O_APPEND = 1024; ]]
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
++ffi.cdef[[ static const unsigned O_APPEND = 8; ]]
++end
++
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+ ffi.cdef[[
+-static const unsigned ETIME = 62;
+-static const unsigned ETIMEDOUT = 110;
+-static const unsigned O_APPEND = 1024;
+ static const unsigned O_CLOEXEC = 524288;
+ static const unsigned O_CREAT = 64;
+ static const unsigned O_NONBLOCK = 2048;
+ ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[
+-static const unsigned ETIME = 101;
+-static const unsigned ETIMEDOUT = 60;
+-static const unsigned O_APPEND = 8;
+ static const unsigned O_CLOEXEC = 16777216;
+ static const unsigned O_CREAT = 512;
+ static const unsigned O_NONBLOCK = 4;
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++static const unsigned O_CLOEXEC = 8192;
++static const unsigned O_CREAT = 256;
++static const unsigned O_NONBLOCK = 128;
++]]
+ end
+ 
+ ffi.cdef[[
+@@ -71,7 +96,7 @@ static const unsigned O_RDONLY = 0;
+ static const unsigned O_RDWR = 2;
+ ]]
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
+ ffi.cdef[[ static const unsigned O_TRUNC = 512; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned O_TRUNC = 1024; ]]
+@@ -104,39 +129,66 @@ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|
+ ffi.cdef[[
+ static const unsigned PATH_MAX = 4096;
+ static const unsigned CLOCK_BOOTTIME = 7;
++]]
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
++ffi.cdef[[
++static const unsigned PATH_MAX = 1024;
++static const int CLOCK_BOOTTIME = -1;
++]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++ffi.cdef[[
+ static const unsigned CLOCK_MONOTONIC = 1;
+ static const unsigned CLOCK_MONOTONIC_COARSE = 6;
+ ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[
+-static const unsigned PATH_MAX = 1024;
+-static const int CLOCK_BOOTTIME = -1;
+ static const unsigned CLOCK_MONOTONIC = 6;
+ static const unsigned CLOCK_MONOTONIC_COARSE = 5;
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++static const unsigned CLOCK_MONOTONIC = 2;
++static const unsigned CLOCK_MONOTONIC_COARSE = 2;
++]]
+ end
+ 
+ ffi.cdef[[ static const unsigned CLOCK_REALTIME = 0; ]]
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++ffi.cdef[[ static const unsigned CLOCK_REALTIME_COARSE = 5; ]]
++elseif --[[ macos ]] platform == 0x80 then
++ffi.cdef[[ static const int CLOCK_REALTIME_COARSE = -1; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ static const unsigned CLOCK_REALTIME_COARSE = 0; ]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
++ffi.cdef[[ typedef int clockid_t; ]]
++elseif --[[ macos ]] platform == 0x80 then
++ffi.cdef[[ typedef unsigned clockid_t; ]]
++end
++
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+ ffi.cdef[[
+-static const unsigned CLOCK_REALTIME_COARSE = 5;
+-typedef int clockid_t;
+ static const unsigned FIONREAD = 21531;
+ typedef long suseconds_t;
+ ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[
+-static const int CLOCK_REALTIME_COARSE = -1;
+-typedef unsigned clockid_t;
+ static const unsigned FIONREAD = 1074030207;
+ typedef int32_t suseconds_t;
+ ]]
+ end
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
+ ffi.cdef[[ typedef long time_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef uint32_t time_t; ]]
++end
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|macos ]] bit.band(platform, 0x8f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|macos|qnx_arm ]] bit.band(platform, 0x18f) ~= 0 then
+ ffi.cdef[[ typedef uint32_t useconds_t; ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ typedef unsigned useconds_t; ]]
+@@ -157,6 +209,8 @@ if --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ typedef long blkcnt_t; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ typedef int64_t blkcnt_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef uint32_t blkcnt_t; ]]
+ end
+ 
+ if --[[ linux_arm|linux_x64 ]] bit.band(platform, 0x50) ~= 0 then
+@@ -165,12 +219,16 @@ elseif --[[ linux_arm64 ]] platform == 0x20 then
+ ffi.cdef[[ typedef int blksize_t; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ typedef int32_t blksize_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef uint32_t blksize_t; ]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|macos ]] bit.band(platform, 0x8f) ~= 0 then
+ ffi.cdef[[ typedef uint32_t id_t; ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ typedef unsigned id_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef int id_t; ]]
+ end
+ 
+ if --[[ macos ]] platform == 0x80 then
+@@ -183,24 +241,34 @@ elseif --[[ android_arm64|android_x64|linux_arm|linux_arm64|linux_x64 ]] bit.ban
+ ffi.cdef[[ typedef unsigned mode_t; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ typedef uint16_t mode_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef uint32_t mode_t; ]]
++end
++
++if --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef int32_t _Offt; ]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+-ffi.cdef[[
+-typedef long off_t;
+-typedef int pid_t;
+-]]
++ffi.cdef[[ typedef long off_t; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+-ffi.cdef[[
+-typedef int64_t off_t;
+-typedef int32_t pid_t;
+-]]
++ffi.cdef[[ typedef int64_t off_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef _Offt off_t; ]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
++ffi.cdef[[ typedef int pid_t; ]]
++elseif --[[ macos ]] platform == 0x80 then
++ffi.cdef[[ typedef int32_t pid_t; ]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|macos ]] bit.band(platform, 0x8f) ~= 0 then
+ ffi.cdef[[ typedef uint32_t uid_t; ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ typedef unsigned uid_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef int uid_t; ]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+@@ -213,6 +281,11 @@ ffi.cdef[[
+ typedef unsigned fsblkcnt_t;
+ typedef unsigned fsfilcnt_t;
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++typedef uint32_t fsblkcnt_t;
++typedef uint32_t fsfilcnt_t;
++]]
+ end
+ 
+ if --[[ android_arm|android_x86|macos ]] bit.band(platform, 0x89) ~= 0 then
+@@ -301,6 +374,30 @@ struct statvfs {
+   int __f_spare[5];
+ };
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct statvfs {
++  unsigned long f_bsize;
++  unsigned long f_frsize;
++  fsblkcnt_t f_blocks;
++  fsblkcnt_t f_blocks_hi;
++  fsblkcnt_t f_bfree;
++  fsblkcnt_t f_bfree_hi;
++  fsblkcnt_t f_bavail;
++  fsblkcnt_t f_bavail_hi;
++  fsfilcnt_t f_files;
++  fsfilcnt_t f_files_hi;
++  fsfilcnt_t f_ffree;
++  fsfilcnt_t f_ffree_hi;
++  fsfilcnt_t f_favail;
++  fsfilcnt_t f_favail_hi;
++  unsigned long f_fsid;
++  char f_basetype[16];
++  unsigned long f_flag;
++  unsigned long f_namemax;
++  unsigned long f_filler[21];
++};
++]]
+ end
+ 
+ if --[[ macos ]] platform == 0x80 then
+@@ -313,6 +410,8 @@ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|
+ ffi.cdef[[ static const unsigned AF_INET6 = 10; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned AF_INET6 = 30; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ static const unsigned AF_INET6 = 24; ]]
+ end
+ 
+ if --[[ macos ]] platform == 0x80 then
+@@ -328,7 +427,7 @@ static const unsigned AF_UNIX = 1;
+ static const unsigned NI_MAXHOST = 1025;
+ ]]
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|macos ]] bit.band(platform, 0x8f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|macos|qnx_arm ]] bit.band(platform, 0x18f) ~= 0 then
+ ffi.cdef[[ static const unsigned NI_NUMERICHOST = 2; ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ static const unsigned NI_NUMERICHOST = 1; ]]
+@@ -336,7 +435,7 @@ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+ ffi.cdef[[ static const unsigned SOCK_CLOEXEC = 524288; ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[ static const unsigned SOCK_CLOEXEC = 0; ]]
+ end
+ 
+@@ -344,7 +443,7 @@ ffi.cdef[[ static const unsigned SOCK_DGRAM = 2; ]]
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+ ffi.cdef[[ static const unsigned SOCK_NONBLOCK = 2048; ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[ static const unsigned SOCK_NONBLOCK = 0; ]]
+ end
+ 
+@@ -353,7 +452,7 @@ static const unsigned SOCK_RAW = 3;
+ static const unsigned SOCK_SEQPACKET = 5;
+ ]]
+ 
+-if --[[ linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xf0) ~= 0 then
++if --[[ linux_arm|linux_arm64|linux_x64|macos|qnx_arm ]] bit.band(platform, 0x1f0) ~= 0 then
+ ffi.cdef[[ typedef char *caddr_t; ]]
+ end
+ 
+@@ -364,23 +463,31 @@ typedef uint16_t in_port_t;
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+ ffi.cdef[[ typedef unsigned short sa_family_t; ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[ typedef uint8_t sa_family_t; ]]
+ end
+ 
+ if --[[ android_arm|android_x86 ]] bit.band(platform, 0x9) ~= 0 then
+ ffi.cdef[[ typedef int32_t socklen_t; ]]
+-elseif --[[ android_arm64|android_x64|macos ]] bit.band(platform, 0x86) ~= 0 then
++elseif --[[ android_arm64|android_x64|macos|qnx_arm ]] bit.band(platform, 0x186) ~= 0 then
+ ffi.cdef[[ typedef uint32_t socklen_t; ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ typedef unsigned socklen_t; ]]
+ end
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
+ ffi.cdef[[
+ struct in_addr {
+   in_addr_t s_addr;
+ };
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct in_addr {
++  in_addr_t s_addr;
++} __attribute__((__packed__)) ;
++]]
++end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
+ ffi.cdef[[
+@@ -402,7 +509,7 @@ struct in6_addr {
+   } __in6_u;
+ };
+ ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[
+ struct in6_addr {
+   union {
+@@ -421,7 +528,7 @@ struct sockaddr {
+   char sa_data[14];
+ };
+ ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[
+ struct sockaddr {
+   uint8_t sa_len;
+@@ -480,13 +587,6 @@ struct sockaddr_in {
+   struct in_addr sin_addr;
+   unsigned char __pad[16 - sizeof (short) - sizeof (unsigned short) - sizeof (struct in_addr)];
+ };
+-struct sockaddr_in6 {
+-  unsigned short sin6_family;
+-  uint16_t sin6_port;
+-  uint32_t sin6_flowinfo;
+-  struct in6_addr sin6_addr;
+-  uint32_t sin6_scope_id;
+-};
+ ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[
+@@ -496,13 +596,6 @@ struct sockaddr_in {
+   struct in_addr sin_addr;
+   unsigned char sin_zero[sizeof (struct sockaddr) - (sizeof (unsigned short)) - sizeof (in_port_t) - sizeof (struct in_addr)];
+ };
+-struct sockaddr_in6 {
+-  sa_family_t sin6_family;
+-  in_port_t sin6_port;
+-  uint32_t sin6_flowinfo;
+-  struct in6_addr sin6_addr;
+-  uint32_t sin6_scope_id;
+-};
+ ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[
+@@ -513,6 +606,41 @@ struct sockaddr_in {
+   struct in_addr sin_addr;
+   char sin_zero[8];
+ };
++]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct sockaddr_in {
++  uint8_t sin_len;
++  sa_family_t sin_family;
++  in_port_t sin_port;
++  struct in_addr sin_addr;
++  int8_t sin_zero[8];
++};
++]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
++ffi.cdef[[
++struct sockaddr_in6 {
++  unsigned short sin6_family;
++  uint16_t sin6_port;
++  uint32_t sin6_flowinfo;
++  struct in6_addr sin6_addr;
++  uint32_t sin6_scope_id;
++};
++]]
++elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
++ffi.cdef[[
++struct sockaddr_in6 {
++  sa_family_t sin6_family;
++  in_port_t sin6_port;
++  uint32_t sin6_flowinfo;
++  struct in6_addr sin6_addr;
++  uint32_t sin6_scope_id;
++};
++]]
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
++ffi.cdef[[
+ struct sockaddr_in6 {
+   uint8_t sin6_len;
+   sa_family_t sin6_family;
+@@ -539,6 +667,14 @@ struct sockaddr_un {
+   char sun_path[104];
+ };
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct sockaddr_un {
++  uint8_t sun_len;
++  sa_family_t sun_family;
++  char sun_path[104];
++};
++]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
+@@ -579,6 +715,16 @@ struct sockaddr_storage {
+   char __ss_pad2[(128 - sizeof (uint8_t) - sizeof (sa_family_t) - ((sizeof (int64_t)) - sizeof (uint8_t) - sizeof (sa_family_t)) - (sizeof (int64_t)))];
+ };
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct sockaddr_storage {
++  uint8_t ss_len;
++  sa_family_t ss_family;
++  char __ss_pad1[((sizeof (int64_t)) - 2)];
++  int64_t __ss_align;
++  char __ss_pad2[(128 - 2 - ((sizeof (int64_t)) - 2) - (sizeof (int64_t)))];
++};
++]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+@@ -608,6 +754,18 @@ struct ifaddrs {
+   void *ifa_data;
+ };
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct ifaddrs {
++  struct ifaddrs *ifa_next;
++  char *ifa_name;
++  u_int ifa_flags;
++  struct sockaddr *ifa_addr;
++  struct sockaddr *ifa_netmask;
++  struct sockaddr *ifa_dstaddr;
++  void *ifa_data;
++};
++]]
+ end
+ 
+ if --[[ macos ]] platform == 0x80 then
+@@ -690,6 +848,29 @@ struct ifreq {
+   } ifr_ifru;
+ };
+ ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++struct ifreq {
++  char ifr_name[16];
++  union {
++    struct sockaddr ifru_addr;
++    struct sockaddr ifru_dstaddr;
++    struct sockaddr ifru_broadaddr;
++    struct sockaddr_storage ifru_space;
++    int ifru_flags;
++    int ifru_metric;
++    int ifru_mtu;
++    int ifru_dlt;
++    unsigned ifru_value;
++    void *ifru_data;
++    struct {
++      uint32_t b_buflen;
++      void *b_buf;
++    } ifru_b;
++    int ifru_fibmask;
++  } ifr_ifru;
++};
++]]
+ end
+ 
+ if --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+@@ -749,13 +930,13 @@ struct iwreq {
+ ]]
+ end
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|macos ]] bit.band(platform, 0x8f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|macos|qnx_arm ]] bit.band(platform, 0x18f) ~= 0 then
+ ffi.cdef[[ typedef unsigned nfds_t; ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ typedef unsigned long nfds_t; ]]
+ end
+ 
+-if --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
++if --[[ linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x170) ~= 0 then
+ ffi.cdef[[
+ typedef int mqd_t;
+ int mq_close(mqd_t);
+@@ -764,7 +945,7 @@ ssize_t mq_receive(mqd_t, char *, size_t, unsigned *);
+ ]]
+ end
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
+ ffi.cdef[[ static const unsigned PTHREAD_CREATE_DETACHED = 1; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned PTHREAD_CREATE_DETACHED = 2; ]]
+@@ -829,6 +1010,8 @@ elseif --[[ linux_arm64|linux_x64 ]] bit.band(platform, 0x60) ~= 0 then
+ ffi.cdef[[ typedef union pthread_attr_t pthread_attr_t; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ typedef struct _opaque_pthread_attr_t pthread_attr_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef struct _thread_attr pthread_attr_t; ]]
+ end
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
+@@ -837,6 +1020,8 @@ elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 the
+ ffi.cdef[[ typedef unsigned long pthread_t; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ typedef struct _opaque_pthread_t *pthread_t; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ typedef int32_t pthread_t; ]]
+ end
+ 
+ ffi.cdef[[
+@@ -847,7 +1032,7 @@ int pthread_attr_setdetachstate(pthread_attr_t *, int);
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
+ ffi.cdef[[ int pthread_create(pthread_t *, pthread_attr_t const *, void *(*)(void *), void *); ]]
+-elseif --[[ linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xf0) ~= 0 then
++elseif --[[ linux_arm|linux_arm64|linux_x64|macos|qnx_arm ]] bit.band(platform, 0x1f0) ~= 0 then
+ ffi.cdef[[ int pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *); ]]
+ end
+ 
+@@ -877,11 +1062,23 @@ if --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
+ ffi.cdef[[ int shm_open(const char *, int, mode_t); ]]
+ end
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
+ ffi.cdef[[
+ static const unsigned POLLERR = 8;
+ static const unsigned POLLHUP = 16;
+ static const unsigned POLLIN = 1;
+ static const unsigned POLLOUT = 4;
++]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++static const unsigned POLLERR = 32;
++static const unsigned POLLHUP = 64;
++static const unsigned POLLIN = 5;
++static const unsigned POLLOUT = 2;
++]]
++end
++
++ffi.cdef[[
+ struct pollfd {
+   int fd;
+   short events;
+@@ -892,7 +1089,13 @@ void *calloc(size_t, size_t);
+ void free(void *);
+ void *malloc(size_t);
+ char *mkdtemp(char *);
+-int mkstemps(char *, int);
++]]
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
++ffi.cdef[[ int mkstemps(char *, int); ]]
++end
++
++ffi.cdef[[
+ void *realloc(void *, size_t);
+ char *realpath(const char *, char *);
+ int setenv(const char *, const char *, int);
+@@ -907,7 +1110,7 @@ ffi.cdef[[
+ char *basename(const char *);
+ char *dirname(const char *);
+ ]]
+-elseif --[[ linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xf0) ~= 0 then
++elseif --[[ linux_arm|linux_arm64|linux_x64|macos|qnx_arm ]] bit.band(platform, 0x1f0) ~= 0 then
+ ffi.cdef[[
+ char *basename(char *);
+ char *dirname(char *);
+@@ -923,7 +1126,7 @@ int fcntl(int, int, ...);
+ int open(const char *, int, ...);
+ ]]
+ 
+-if --[[ android_arm|android_x86|macos ]] bit.band(platform, 0x89) ~= 0 then
++if --[[ android_arm|android_x86|macos|qnx_arm ]] bit.band(platform, 0x189) ~= 0 then
+ ffi.cdef[[ static const unsigned HAVE_POSIX_FALLOCATE = 0; ]]
+ elseif --[[ android_arm64|android_x64|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x76) ~= 0 then
+ ffi.cdef[[ static const unsigned HAVE_POSIX_FALLOCATE = 1; ]]
+@@ -943,7 +1146,18 @@ FILE *fopen(const char *, const char *);
+ int fputs(const char *, FILE *);
+ size_t fread(void *, size_t, size_t, FILE *);
+ size_t fwrite(const void *, size_t, size_t, FILE *);
++]]
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
++ffi.cdef[[ int sprintf(char *, const char *, ...); ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++int sprintf(char *, const char *, ...);
+ int sprintf(char *, const char *, ...);
++]]
++end
++
++ffi.cdef[[
+ void _exit(int);
+ int access(const char *, int);
+ int close(int);
+@@ -954,7 +1168,7 @@ int execlp(const char *, const char *, ...);
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|macos ]] bit.band(platform, 0x8f) ~= 0 then
+ ffi.cdef[[ int execvp(const char *, char *const *); ]]
+-elseif --[[ linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x70) ~= 0 then
++elseif --[[ linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x170) ~= 0 then
+ ffi.cdef[[ int execvp(const char *, char *const[]); ]]
+ end
+ 
+@@ -977,7 +1191,18 @@ int usleep(useconds_t);
+ ssize_t write(int, const void *, size_t);
+ void *memchr(const void *, int, size_t);
+ int memcmp(const void *, const void *, size_t);
++]]
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
++ffi.cdef[[ void *memmove(void *, const void *, size_t); ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++void *memmove(void *, const void *, size_t);
+ void *memmove(void *, const void *, size_t);
++]]
++end
++
++ffi.cdef[[
+ int strcasecmp(const char *, const char *);
+ int strcmp(const char *, const char *);
+ int strcoll(const char *, const char *);
+@@ -1004,33 +1229,54 @@ const char *gai_strerror(int);
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
+ ffi.cdef[[ int getnameinfo(const struct sockaddr *, socklen_t, char *, size_t, char *, size_t, int); ]]
+-elseif --[[ linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xf0) ~= 0 then
++elseif --[[ linux_arm|linux_arm64|linux_x64|macos|qnx_arm ]] bit.band(platform, 0x1f0) ~= 0 then
+ ffi.cdef[[ int getnameinfo(const struct sockaddr *, socklen_t, char *, socklen_t, char *, socklen_t, int); ]]
+ end
+ 
+ ffi.cdef[[
+ int inet_aton(const char *, struct in_addr *);
+ int statvfs(const char *, struct statvfs *);
+-static const unsigned WNOHANG = 1;
+-pid_t waitpid(pid_t, int *, int);
+ ]]
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
++ffi.cdef[[ static const unsigned WNOHANG = 1; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ static const unsigned WNOHANG = 64; ]]
++end
++
++ffi.cdef[[ pid_t waitpid(pid_t, int *, int); ]]
++
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
+ ffi.cdef[[ static const unsigned MAP_ANONYMOUS = 32; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned MAP_ANONYMOUS = 4096; ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ static const unsigned MAP_ANONYMOUS = 524288; ]]
+ end
+ 
+ ffi.cdef[[
+ static const int MAP_FAILED = -1;
+ static const unsigned MAP_SHARED = 1;
++]]
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
++ffi.cdef[[
+ static const unsigned PROT_READ = 1;
+ static const unsigned PROT_WRITE = 2;
++]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[
++static const unsigned PROT_READ = 256;
++static const unsigned PROT_WRITE = 512;
++]]
++end
++
++ffi.cdef[[
+ void *mmap(void *, size_t, int, int, int, off_t);
+ int munmap(void *, size_t);
+ ]]
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
+ ffi.cdef[[
+ struct tm {
+   int tm_sec;
+@@ -1074,7 +1320,7 @@ size_t strftime(char *, size_t, const char *, const struct tm *);
+ time_t time(time_t *);
+ ]]
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
+ ffi.cdef[[ time_t timegm(struct tm *); ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ time_t timegm(struct tm *const); ]]
+@@ -1089,19 +1335,26 @@ struct timezone {
+ 
+ if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm ]] bit.band(platform, 0x1f) ~= 0 then
+ ffi.cdef[[ int gettimeofday(struct timeval *, struct timezone *); ]]
+-elseif --[[ linux_arm64|linux_x64|macos ]] bit.band(platform, 0xe0) ~= 0 then
++elseif --[[ linux_arm64|linux_x64|macos|qnx_arm ]] bit.band(platform, 0x1e0) ~= 0 then
+ ffi.cdef[[ int gettimeofday(struct timeval *, void *); ]]
+ end
+ 
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
++ffi.cdef[[ int settimeofday(const struct timeval *, const struct timezone *); ]]
++elseif --[[ qnx_arm ]] platform == 0x100 then
++ffi.cdef[[ int settimeofday(const struct timeval *, const void *); ]]
++end
++
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xff) ~= 0 then
+ ffi.cdef[[
+-int settimeofday(const struct timeval *, const struct timezone *);
+ static const unsigned PRIO_PROCESS = 0;
+ static const unsigned PRIO_PGRP = 1;
+ static const unsigned PRIO_USER = 2;
+ int setpriority(int, id_t, int);
+ ]]
++end
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64 ]] bit.band(platform, 0x7f) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|linux_arm|linux_arm64|linux_x64|qnx_arm ]] bit.band(platform, 0x17f) ~= 0 then
+ ffi.cdef[[ static const unsigned TCIFLUSH = 0; ]]
+ elseif --[[ macos ]] platform == 0x80 then
+ ffi.cdef[[ static const unsigned TCIFLUSH = 1; ]]
+@@ -1118,7 +1371,7 @@ void freeifaddrs(struct ifaddrs *);
+ int getifaddrs(struct ifaddrs **);
+ ]]
+ 
+-if --[[ android_arm|android_arm64|android_x64|android_x86 ]] bit.band(platform, 0xf) ~= 0 then
++if --[[ android_arm|android_arm64|android_x64|android_x86|qnx_arm ]] bit.band(platform, 0x10f) ~= 0 then
+ ffi.cdef[[ int ioctl(int, int, ...); ]]
+ elseif --[[ linux_arm|linux_arm64|linux_x64|macos ]] bit.band(platform, 0xf0) ~= 0 then
+ ffi.cdef[[ int ioctl(int, unsigned long, ...); ]]
+-- 
+2.56.0
+

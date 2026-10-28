@@ -1,0 +1,719 @@
+From 40ca6e73322e063f343081eeaf5dd0aa9b8e2ed8 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:10:05 +0100
+Subject: [PATCH 3/4] Add BlackBerry 10 framebuffer & input (libscreen + BPS)
+
+- ffi/bb10_h: libscreen, BPS (navigator, battery) & keycodes cdecls (ffi-cdecl).
+- ffi/bb10: shared libscreen window + BPS init, battery, navigator_invoke.
+- ffi/framebuffer_bb10: RGB32 shadow buffer copied to the window, like Android.
+- ffi/input_bb10: BPS events to evdev-style events (touch, keys, navigator).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi-cdecl/bb10_cdecl.c   | 172 +++++++++++++++++++++++++++++++++++++++
+ ffi/bb10.lua             | 133 ++++++++++++++++++++++++++++++
+ ffi/bb10_h.lua           | 137 +++++++++++++++++++++++++++++++
+ ffi/framebuffer_bb10.lua |  52 ++++++++++++
+ ffi/input_bb10.lua       | 168 ++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 662 insertions(+)
+ create mode 100644 ffi-cdecl/bb10_cdecl.c
+ create mode 100644 ffi/bb10.lua
+ create mode 100644 ffi/bb10_h.lua
+ create mode 100644 ffi/framebuffer_bb10.lua
+ create mode 100644 ffi/input_bb10.lua
+
+diff --git a/ffi-cdecl/bb10_cdecl.c b/ffi-cdecl/bb10_cdecl.c
+new file mode 100644
+index 00000000..fa63e047
+--- /dev/null
++++ b/ffi-cdecl/bb10_cdecl.c
+@@ -0,0 +1,172 @@
++// BlackBerry 10: libscreen (window & events), BPS (event loop, navigator, battery), keycodes.
++
++#include <bps/battery.h>
++#include <bps/bps.h>
++#include <bps/event.h>
++#include <bps/navigator.h>
++#include <bps/screen.h>
++#include <screen/screen.h>
++#include <sys/keycodes.h>
++
++#include "ffi-cdecl.h"
++
++// libscreen. {{{
++
++cdecl_type(screen_context_t);
++cdecl_type(screen_display_t);
++cdecl_type(screen_event_t);
++cdecl_type(screen_window_t);
++cdecl_type(screen_buffer_t);
++
++cdecl_const(SCREEN_APPLICATION_CONTEXT);
++
++cdecl_const(SCREEN_PROPERTY_BUFFER_SIZE);
++cdecl_const(SCREEN_PROPERTY_DISPLAY);
++cdecl_const(SCREEN_PROPERTY_DPI);
++cdecl_const(SCREEN_PROPERTY_FLAGS);
++cdecl_const(SCREEN_PROPERTY_FORMAT);
++cdecl_const(SCREEN_PROPERTY_IDLE_MODE);
++cdecl_const(SCREEN_PROPERTY_KEY_CAP);
++cdecl_const(SCREEN_PROPERTY_KEY_FLAGS);
++cdecl_const(SCREEN_PROPERTY_KEY_MODIFIERS);
++cdecl_const(SCREEN_PROPERTY_KEY_SCAN);
++cdecl_const(SCREEN_PROPERTY_KEY_SYM);
++cdecl_const(SCREEN_PROPERTY_POINTER);
++cdecl_const(SCREEN_PROPERTY_POSITION);
++cdecl_const(SCREEN_PROPERTY_RENDER_BUFFERS);
++cdecl_const(SCREEN_PROPERTY_ROTATION);
++cdecl_const(SCREEN_PROPERTY_SIZE);
++cdecl_const(SCREEN_PROPERTY_SOURCE_POSITION);
++cdecl_const(SCREEN_PROPERTY_STRIDE);
++cdecl_const(SCREEN_PROPERTY_SWAP_INTERVAL);
++cdecl_const(SCREEN_PROPERTY_TOUCH_ID);
++cdecl_const(SCREEN_PROPERTY_TYPE);
++cdecl_const(SCREEN_PROPERTY_USAGE);
++cdecl_const(SCREEN_PROPERTY_ZORDER);
++
++cdecl_const(SCREEN_FORMAT_RGBA8888);
++cdecl_const(SCREEN_FORMAT_RGBX8888);
++cdecl_const(SCREEN_FORMAT_RGB565);
++
++cdecl_const(SCREEN_USAGE_NATIVE);
++cdecl_const(SCREEN_USAGE_READ);
++cdecl_const(SCREEN_USAGE_WRITE);
++
++cdecl_const(SCREEN_IDLE_MODE_KEEP_AWAKE);
++cdecl_const(SCREEN_IDLE_MODE_NORMAL);
++
++cdecl_const(SCREEN_EVENT_CLOSE);
++cdecl_const(SCREEN_EVENT_KEYBOARD);
++cdecl_const(SCREEN_EVENT_MTOUCH_MOVE);
++cdecl_const(SCREEN_EVENT_MTOUCH_RELEASE);
++cdecl_const(SCREEN_EVENT_MTOUCH_TOUCH);
++cdecl_const(SCREEN_EVENT_POINTER);
++cdecl_const(SCREEN_EVENT_PROPERTY);
++
++cdecl_func(screen_create_context);
++cdecl_func(screen_destroy_context);
++cdecl_func(screen_flush_context);
++cdecl_func(screen_create_window);
++cdecl_func(screen_destroy_window);
++cdecl_func(screen_create_window_buffers);
++cdecl_func(screen_destroy_window_buffers);
++cdecl_func(screen_get_window_property_iv);
++cdecl_func(screen_get_window_property_pv);
++cdecl_func(screen_set_window_property_iv);
++cdecl_func(screen_get_buffer_property_iv);
++cdecl_func(screen_get_buffer_property_pv);
++cdecl_func(screen_get_display_property_iv);
++cdecl_func(screen_post_window);
++cdecl_func(screen_get_event_property_iv);
++
++// }}}
++
++// BPS. {{{
++
++cdecl_const(BPS_SUCCESS);
++cdecl_const(BPS_FAILURE);
++
++cdecl_type(bps_event_t);
++
++cdecl_func(bps_initialize);
++cdecl_func(bps_shutdown);
++cdecl_func(bps_get_event);
++cdecl_func(bps_event_get_domain);
++cdecl_func(bps_event_get_code);
++
++cdecl_func(screen_request_events);
++cdecl_func(screen_stop_events);
++cdecl_func(screen_get_domain);
++cdecl_func(screen_event_get_event);
++
++cdecl_const(NAVIGATOR_EXIT);
++cdecl_const(NAVIGATOR_WINDOW_STATE);
++cdecl_const(NAVIGATOR_SWIPE_DOWN);
++cdecl_const(NAVIGATOR_WINDOW_ACTIVE);
++cdecl_const(NAVIGATOR_WINDOW_INACTIVE);
++cdecl_const(NAVIGATOR_ORIENTATION_CHECK);
++cdecl_const(NAVIGATOR_ORIENTATION);
++cdecl_const(NAVIGATOR_LOW_MEMORY);
++cdecl_const(NAVIGATOR_DEVICE_LOCK_STATE);
++
++cdecl_type(navigator_window_state_t);
++
++cdecl_func(navigator_request_events);
++cdecl_func(navigator_stop_events);
++cdecl_func(navigator_get_domain);
++cdecl_func(navigator_event_get_window_state);
++cdecl_func(navigator_orientation_check_response);
++cdecl_func(navigator_rotation_lock);
++cdecl_func(navigator_invoke);
++cdecl_func(navigator_close_window);
++cdecl_func(navigator_extend_terminate);
++
++cdecl_const(BATTERY_INFO);
++cdecl_const(BATTERY_CHARGING_NOT_CHARGING);
++cdecl_const(BATTERY_CHARGING_TRICKLE_CHARGING);
++cdecl_const(BATTERY_CHARGING_CONSTANT_CURRENT);
++cdecl_const(BATTERY_CHARGING_CONSTANT_VOLTAGE);
++cdecl_const(BATTERY_CHARGING_DONE_CHARGING);
++
++cdecl_type(battery_info_t);
++
++cdecl_func(battery_get_info);
++cdecl_func(battery_free_info);
++cdecl_func(battery_info_get_state_of_charge);
++cdecl_func(battery_info_get_system_charging_state);
++cdecl_func(battery_info_is_charger_ready);
++
++// }}}
++
++// Keycodes. {{{
++
++cdecl_const(KEY_DOWN);
++cdecl_const(KEY_REPEAT);
++cdecl_const(KEY_SCAN_VALID);
++cdecl_const(KEY_SYM_VALID);
++cdecl_const(KEY_CAP_VALID);
++
++cdecl_const(KEYCODE_BACKSPACE);
++cdecl_const(KEYCODE_DELETE);
++cdecl_const(KEYCODE_DOWN);
++cdecl_const(KEYCODE_ESCAPE);
++cdecl_const(KEYCODE_LEFT);
++cdecl_const(KEYCODE_LEFT_ALT);
++cdecl_const(KEYCODE_LEFT_SHIFT);
++cdecl_const(KEYCODE_MENU);
++cdecl_const(KEYCODE_PG_DOWN);
++cdecl_const(KEYCODE_PG_UP);
++cdecl_const(KEYCODE_RETURN);
++cdecl_const(KEYCODE_RIGHT);
++cdecl_const(KEYCODE_RIGHT_ALT);
++cdecl_const(KEYCODE_RIGHT_SHIFT);
++cdecl_const(KEYCODE_SPACE);
++cdecl_const(KEYCODE_UP);
++cdecl_const(KEYCODE_VOLUME_DOWN);
++cdecl_const(KEYCODE_VOLUME_UP);
++cdecl_const(KEYCODE_PLAY);
++cdecl_const(KEYCODE_PAUSE);
++
++// }}}
++
++// vim: foldmethod=marker foldlevel=0
+diff --git a/ffi/bb10.lua b/ffi/bb10.lua
+new file mode 100644
+index 00000000..2fd452ab
+--- /dev/null
++++ b/ffi/bb10.lua
+@@ -0,0 +1,133 @@
++--[[--
++BlackBerry 10 (QNX 8) platform glue, shared by `ffi/framebuffer_bb10` & `ffi/input_bb10`:
++one libscreen application context with a single software-rendered window, and the BPS
++event loop (screen, navigator & battery events).
++
++@module ffi.bb10
++]]
++
++local bit = require("bit")
++local ffi = require("ffi")
++local C = ffi.C
++
++require("ffi/bb10_h")
++
++local bb10 = {
++    screen = ffi.load("libscreen.so.1"),
++    bps = ffi.load("libbps.so.3"),
++}
++
++local function check(ret, what)
++    if ret ~= 0 then
++        error(string.format("%s failed: %s", what, ffi.string(C.strerror(ffi.errno()))))
++    end
++end
++
++local function setWindowIv(prop, ...)
++    local values = ffi.new("int[?]", select("#", ...), ...)
++    check(bb10.screen.screen_set_window_property_iv(bb10.win, prop, values), "screen_set_window_property_iv")
++end
++
++local function getWindowIv(prop, n)
++    local values = ffi.new("int[?]", n or 1)
++    check(bb10.screen.screen_get_window_property_iv(bb10.win, prop, values), "screen_get_window_property_iv")
++    return values
++end
++
++function bb10.init()
++    if bb10.ctx then
++        return
++    end
++    local S = bb10.screen
++
++    local ctx = ffi.new("screen_context_t[1]")
++    check(S.screen_create_context(ctx, C.SCREEN_APPLICATION_CONTEXT), "screen_create_context")
++    bb10.ctx = ctx[0]
++
++    local win = ffi.new("screen_window_t[1]")
++    check(S.screen_create_window(win, bb10.ctx), "screen_create_window")
++    bb10.win = win[0]
++
++    setWindowIv(C.SCREEN_PROPERTY_USAGE, bit.bor(C.SCREEN_USAGE_NATIVE, C.SCREEN_USAGE_WRITE))
++    setWindowIv(C.SCREEN_PROPERTY_FORMAT, C.SCREEN_FORMAT_RGBX8888)
++    -- A new window covers the whole display.
++    local size = getWindowIv(C.SCREEN_PROPERTY_SIZE, 2)
++    bb10.width, bb10.height = size[0], size[1]
++    setWindowIv(C.SCREEN_PROPERTY_BUFFER_SIZE, bb10.width, bb10.height)
++    bb10.setKeepAwake(true)
++
++    -- A single buffer: we only ever post our own (complete) shadow copy.
++    check(S.screen_create_window_buffers(bb10.win, 1), "screen_create_window_buffers")
++    local buf = ffi.new("screen_buffer_t[1]")
++    check(S.screen_get_window_property_pv(bb10.win, C.SCREEN_PROPERTY_RENDER_BUFFERS, ffi.cast("void **", buf)),
++          "screen_get_window_property_pv(RENDER_BUFFERS)")
++    bb10.buffer = buf[0]
++    local ptr = ffi.new("void *[1]")
++    check(S.screen_get_buffer_property_pv(bb10.buffer, C.SCREEN_PROPERTY_POINTER, ptr),
++          "screen_get_buffer_property_pv(POINTER)")
++    bb10.pixels = ptr[0]
++    local stride = ffi.new("int[1]")
++    check(S.screen_get_buffer_property_iv(bb10.buffer, C.SCREEN_PROPERTY_STRIDE, stride),
++          "screen_get_buffer_property_iv(STRIDE)")
++    bb10.stride = stride[0]
++
++    local disp = ffi.new("screen_display_t[1]")
++    if S.screen_get_window_property_pv(bb10.win, C.SCREEN_PROPERTY_DISPLAY, ffi.cast("void **", disp)) == 0 then
++        local dpi = ffi.new("int[1]")
++        if S.screen_get_display_property_iv(disp[0], C.SCREEN_PROPERTY_DPI, dpi) == 0 and dpi[0] > 0 then
++            bb10.dpi = dpi[0]
++        end
++    end
++
++    local B = bb10.bps
++    if B.bps_initialize() ~= C.BPS_SUCCESS then
++        error("bps_initialize failed")
++    end
++    B.screen_request_events(bb10.ctx)
++    B.navigator_request_events(0)
++    -- The Q10's display is square: never let the navigator rotate us.
++    B.navigator_rotation_lock(true)
++    bb10.screen_domain = B.screen_get_domain()
++    bb10.navigator_domain = B.navigator_get_domain()
++end
++
++function bb10.setKeepAwake(keep_awake)
++    setWindowIv(C.SCREEN_PROPERTY_IDLE_MODE, keep_awake and C.SCREEN_IDLE_MODE_KEEP_AWAKE or C.SCREEN_IDLE_MODE_NORMAL)
++end
++
++--- Show the window buffer's content, `x, y, w, h` being the dirty rectangle.
++function bb10.post(x, y, w, h)
++    local rect = ffi.new("int[4]", x or 0, y or 0, w or bb10.width, h or bb10.height)
++    bb10.screen.screen_post_window(bb10.win, bb10.buffer, 1, rect, 0)
++end
++
++--- Battery state of charge (percent, or nil) and whether a charger is connected.
++function bb10.getBatteryInfo()
++    local info = ffi.new("battery_info_t *[1]")
++    if bb10.bps.battery_get_info(info) ~= C.BPS_SUCCESS then
++        return
++    end
++    local capacity = bb10.bps.battery_info_get_state_of_charge(info[0])
++    local charging = bb10.bps.battery_info_get_system_charging_state(info[0])
++    local plugged = bb10.bps.battery_info_is_charger_ready(info[0])
++    bb10.bps.battery_free_info(info)
++    return capacity >= 0 and capacity or nil, charging ~= C.BATTERY_CHARGING_NOT_CHARGING and charging ~= C.BATTERY_CHARGING_DONE_CHARGING, plugged
++end
++
++function bb10.openLink(uri)
++    return bb10.bps.navigator_invoke(uri, nil) == C.BPS_SUCCESS
++end
++
++function bb10.shutdown()
++    if not bb10.ctx then
++        return
++    end
++    bb10.bps.screen_stop_events(bb10.ctx)
++    bb10.bps.navigator_stop_events(0)
++    bb10.bps.bps_shutdown()
++    bb10.screen.screen_destroy_window(bb10.win)
++    bb10.screen.screen_destroy_context(bb10.ctx)
++    bb10.ctx, bb10.win, bb10.buffer, bb10.pixels = nil, nil, nil, nil
++end
++
++return bb10
+diff --git a/ffi/bb10_h.lua b/ffi/bb10_h.lua
+new file mode 100644
+index 00000000..f030d289
+--- /dev/null
++++ b/ffi/bb10_h.lua
+@@ -0,0 +1,137 @@
++-- Automatically generated with ffi-cdecl.
++
++require "ffi/posix_h"
++
++require("ffi").cdef[[
++typedef struct _screen_context *screen_context_t;
++typedef struct _screen_display *screen_display_t;
++typedef struct _screen_event *screen_event_t;
++typedef struct _screen_window *screen_window_t;
++typedef struct _screen_buffer *screen_buffer_t;
++static const unsigned SCREEN_APPLICATION_CONTEXT = 0;
++static const unsigned SCREEN_PROPERTY_BUFFER_SIZE = 5;
++static const unsigned SCREEN_PROPERTY_DISPLAY = 11;
++static const unsigned SCREEN_PROPERTY_DPI = 115;
++static const unsigned SCREEN_PROPERTY_FLAGS = 25;
++static const unsigned SCREEN_PROPERTY_FORMAT = 14;
++static const unsigned SCREEN_PROPERTY_IDLE_MODE = 80;
++static const unsigned SCREEN_PROPERTY_KEY_CAP = 24;
++static const unsigned SCREEN_PROPERTY_KEY_FLAGS = 25;
++static const unsigned SCREEN_PROPERTY_KEY_MODIFIERS = 26;
++static const unsigned SCREEN_PROPERTY_KEY_SCAN = 27;
++static const unsigned SCREEN_PROPERTY_KEY_SYM = 28;
++static const unsigned SCREEN_PROPERTY_POINTER = 34;
++static const unsigned SCREEN_PROPERTY_POSITION = 35;
++static const unsigned SCREEN_PROPERTY_RENDER_BUFFERS = 37;
++static const unsigned SCREEN_PROPERTY_ROTATION = 38;
++static const unsigned SCREEN_PROPERTY_SIZE = 40;
++static const unsigned SCREEN_PROPERTY_SOURCE_POSITION = 41;
++static const unsigned SCREEN_PROPERTY_STRIDE = 44;
++static const unsigned SCREEN_PROPERTY_SWAP_INTERVAL = 45;
++static const unsigned SCREEN_PROPERTY_TOUCH_ID = 73;
++static const unsigned SCREEN_PROPERTY_TYPE = 47;
++static const unsigned SCREEN_PROPERTY_USAGE = 48;
++static const unsigned SCREEN_PROPERTY_ZORDER = 54;
++static const unsigned SCREEN_FORMAT_RGBA8888 = 8;
++static const unsigned SCREEN_FORMAT_RGBX8888 = 9;
++static const unsigned SCREEN_FORMAT_RGB565 = 6;
++static const unsigned SCREEN_USAGE_NATIVE = 8;
++static const unsigned SCREEN_USAGE_READ = 2;
++static const unsigned SCREEN_USAGE_WRITE = 4;
++static const unsigned SCREEN_IDLE_MODE_KEEP_AWAKE = 1;
++static const unsigned SCREEN_IDLE_MODE_NORMAL = 0;
++static const unsigned SCREEN_EVENT_CLOSE = 3;
++static const unsigned SCREEN_EVENT_KEYBOARD = 7;
++static const unsigned SCREEN_EVENT_MTOUCH_MOVE = 101;
++static const unsigned SCREEN_EVENT_MTOUCH_RELEASE = 102;
++static const unsigned SCREEN_EVENT_MTOUCH_TOUCH = 100;
++static const unsigned SCREEN_EVENT_POINTER = 6;
++static const unsigned SCREEN_EVENT_PROPERTY = 2;
++int screen_create_context(screen_context_t *, int);
++int screen_destroy_context(screen_context_t);
++int screen_flush_context(screen_context_t, int);
++int screen_create_window(screen_window_t *, screen_context_t);
++int screen_destroy_window(screen_window_t);
++int screen_create_window_buffers(screen_window_t, int);
++int screen_destroy_window_buffers(screen_window_t);
++int screen_get_window_property_iv(screen_window_t, int, int *);
++int screen_get_window_property_pv(screen_window_t, int, void **);
++int screen_set_window_property_iv(screen_window_t, int, const int *);
++int screen_get_buffer_property_iv(screen_buffer_t, int, int *);
++int screen_get_buffer_property_pv(screen_buffer_t, int, void **);
++int screen_get_display_property_iv(screen_display_t, int, int *);
++int screen_post_window(screen_window_t, screen_buffer_t, int, const int *, int);
++int screen_get_event_property_iv(screen_event_t, int, int *);
++static const unsigned BPS_SUCCESS = 0;
++static const int BPS_FAILURE = -1;
++typedef struct bps_event_t bps_event_t;
++int bps_initialize(void);
++void bps_shutdown(void);
++int bps_get_event(bps_event_t **, int);
++int bps_event_get_domain(bps_event_t *);
++unsigned bps_event_get_code(bps_event_t *);
++int screen_request_events(screen_context_t);
++int screen_stop_events(screen_context_t);
++int screen_get_domain();
++screen_event_t screen_event_get_event(bps_event_t *);
++static const unsigned NAVIGATOR_EXIT = 2;
++static const unsigned NAVIGATOR_WINDOW_STATE = 3;
++static const unsigned NAVIGATOR_SWIPE_DOWN = 4;
++static const unsigned NAVIGATOR_WINDOW_ACTIVE = 10;
++static const unsigned NAVIGATOR_WINDOW_INACTIVE = 11;
++static const unsigned NAVIGATOR_ORIENTATION_CHECK = 7;
++static const unsigned NAVIGATOR_ORIENTATION = 8;
++static const unsigned NAVIGATOR_LOW_MEMORY = 6;
++static const unsigned NAVIGATOR_DEVICE_LOCK_STATE = 26;
++typedef enum {
++  NAVIGATOR_WINDOW_FULLSCREEN = 0,
++  NAVIGATOR_WINDOW_THUMBNAIL = 1,
++  NAVIGATOR_WINDOW_INVISIBLE = 2,
++} navigator_window_state_t;
++int navigator_request_events(int);
++int navigator_stop_events(int);
++int navigator_get_domain();
++navigator_window_state_t navigator_event_get_window_state(bps_event_t *);
++void navigator_orientation_check_response(bps_event_t *, bool);
++int navigator_rotation_lock(bool);
++int navigator_invoke(const char *, char **);
++int navigator_close_window(void);
++int navigator_extend_terminate(void);
++static const unsigned BATTERY_INFO = 1;
++static const unsigned BATTERY_CHARGING_NOT_CHARGING = 0;
++static const unsigned BATTERY_CHARGING_TRICKLE_CHARGING = 1;
++static const unsigned BATTERY_CHARGING_CONSTANT_CURRENT = 2;
++static const unsigned BATTERY_CHARGING_CONSTANT_VOLTAGE = 3;
++static const unsigned BATTERY_CHARGING_DONE_CHARGING = 4;
++typedef struct battery_info_t battery_info_t;
++int battery_get_info(battery_info_t **);
++void battery_free_info(battery_info_t **);
++int battery_info_get_state_of_charge(battery_info_t *);
++int battery_info_get_system_charging_state(battery_info_t *);
++bool battery_info_is_charger_ready(battery_info_t *);
++static const unsigned KEY_DOWN = 1;
++static const unsigned KEY_REPEAT = 2;
++static const unsigned KEY_SCAN_VALID = 32;
++static const unsigned KEY_SYM_VALID = 64;
++static const unsigned KEY_CAP_VALID = 128;
++static const unsigned KEYCODE_BACKSPACE = 61448;
++static const unsigned KEYCODE_DELETE = 61695;
++static const unsigned KEYCODE_DOWN = 61524;
++static const unsigned KEYCODE_ESCAPE = 61467;
++static const unsigned KEYCODE_LEFT = 61521;
++static const unsigned KEYCODE_LEFT_ALT = 61673;
++static const unsigned KEYCODE_LEFT_SHIFT = 61665;
++static const unsigned KEYCODE_MENU = 61543;
++static const unsigned KEYCODE_PG_DOWN = 61526;
++static const unsigned KEYCODE_PG_UP = 61525;
++static const unsigned KEYCODE_RETURN = 61453;
++static const unsigned KEYCODE_RIGHT = 61523;
++static const unsigned KEYCODE_RIGHT_ALT = 61674;
++static const unsigned KEYCODE_RIGHT_SHIFT = 61666;
++static const unsigned KEYCODE_SPACE = 32;
++static const unsigned KEYCODE_UP = 61522;
++static const unsigned KEYCODE_VOLUME_DOWN = 61982;
++static const unsigned KEYCODE_VOLUME_UP = 61981;
++static const unsigned KEYCODE_PLAY = 61968;
++static const unsigned KEYCODE_PAUSE = 61459;
++]]
+diff --git a/ffi/framebuffer_bb10.lua b/ffi/framebuffer_bb10.lua
+new file mode 100644
+index 00000000..57b71ac3
+--- /dev/null
++++ b/ffi/framebuffer_bb10.lua
+@@ -0,0 +1,52 @@
++local BB = require("ffi/blitbuffer")
++local bb10 = require("ffi/bb10")
++
++local framebuffer = {}
++
++function framebuffer:init()
++    bb10.init()
++    -- The libscreen window buffer (RGBX8888, i.e., BGRX in memory: see Device.hasBGRFrameBuffer).
++    self.window_bb = BB.new(bb10.width, bb10.height, BB.TYPE_BBRGB32, bb10.pixels, bb10.stride, bb10.stride / 4)
++    -- We present this shadow buffer to the outside, like on Android:
++    -- rotation & night mode are applied when copying it to the window.
++    self.bb = BB.new(bb10.width, bb10.height, BB.TYPE_BBRGB32)
++    self.bb:fill(BB.COLOR_WHITE)
++    if bb10.dpi and not self.dpi then
++        self.dpi = bb10.dpi
++    end
++    self:_updateWindow()
++    framebuffer.parent.init(self)
++end
++
++function framebuffer:_updateWindow()
++    local bb = self.window_bb
++    local ext_bb = self.full_bb or self.bb
++    -- Clone the shadow buffer's rotation & inverse settings, so that the blit below is a 1:1 copy.
++    bb:setInverse(ext_bb:getInverse())
++    bb:setRotation(ext_bb:getRotation())
++    if bb:getInverse() == 1 and BB:getUseCBB() then
++        -- The CBB ignores the invert flag: apply it now.
++        bb:invertblitFrom(ext_bb)
++    else
++        bb:blitFrom(ext_bb)
++    end
++    bb10.post()
++end
++
++function framebuffer:refreshFullImp(x, y, w, h) -- luacheck: ignore
++    self:_updateWindow()
++end
++
++function framebuffer:close()
++    if self.window_bb then
++        self.window_bb:free()
++        self.window_bb = nil
++    end
++    if self.bb then
++        self.bb:free()
++        self.bb = nil
++    end
++    bb10.shutdown()
++end
++
++return require("ffi/framebuffer"):extend(framebuffer)
+diff --git a/ffi/input_bb10.lua b/ffi/input_bb10.lua
+new file mode 100644
+index 00000000..d4d8c65e
+--- /dev/null
++++ b/ffi/input_bb10.lua
+@@ -0,0 +1,168 @@
++--[[--
++BlackBerry 10 input: translates BPS events (libscreen touch & keyboard, navigator)
++into Linux evdev-style events, like `ffi/input_android`.
++
++@module ffi.input_bb10
++]]
++
++local bit = require("bit")
++local ffi = require("ffi")
++local C = ffi.C
++
++local bb10 = require("ffi/bb10")
++require("ffi/posix_h")
++require("ffi/linux_input_h")
++
++local input = {
++    device = nil,
++    open = function() end,
++    close = function() end,
++    closeAll = function() end,
++    fakeTapInput = function() end,
++    is_ffi = true,
++    --- EV_MSC codes for navigator events (handled by the device's `handleMiscEv`).
++    MSC_EXIT = 1,
++    MSC_WINDOW_STATE = 2, -- value: navigator_window_state_t
++    MSC_SWIPE_DOWN = 3,
++    MSC_LOW_MEMORY = 4,
++    MSC_DEVICE_LOCK = 5,
++}
++
++local inputQueue = {}
++
++local function genInputTimeval()
++    local timespec = ffi.new("struct timespec")
++    C.clock_gettime(C.CLOCK_MONOTONIC, timespec)
++    return { sec = tonumber(timespec.tv_sec), usec = math.floor(tonumber(timespec.tv_nsec / 1000)) }
++end
++
++local function genEmuEvent(evtype, code, value, timev)
++    table.insert(inputQueue, {
++        type = tonumber(evtype),
++        code = tonumber(code),
++        value = tonumber(value),
++        time = timev or genInputTimeval(),
++    })
++end
++
++local iv = ffi.new("int[2]")
++
++local function getEventIv(sev, prop)
++    bb10.screen.screen_get_event_property_iv(sev, prop, iv)
++    return iv[0], iv[1]
++end
++
++local function touchEvent(sev, evtype)
++    local slot = getEventIv(sev, C.SCREEN_PROPERTY_TOUCH_ID)
++    local x, y = getEventIv(sev, C.SCREEN_PROPERTY_SOURCE_POSITION)
++    local timev = genInputTimeval()
++    genEmuEvent(C.EV_ABS, C.ABS_MT_SLOT, slot, timev)
++    if evtype == C.SCREEN_EVENT_MTOUCH_TOUCH then
++        genEmuEvent(C.EV_ABS, C.ABS_MT_TRACKING_ID, slot, timev)
++    elseif evtype == C.SCREEN_EVENT_MTOUCH_RELEASE then
++        genEmuEvent(C.EV_ABS, C.ABS_MT_TRACKING_ID, -1, timev)
++    end
++    genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_X, x, timev)
++    genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_Y, y, timev)
++    genEmuEvent(C.EV_SYN, C.SYN_REPORT, 0, timev)
++end
++
++-- Code sent on key down, by key cap, so that the release matches it.
++local pressed = {}
++
++local function isPrintable(sym)
++    return sym >= 0x20 and sym < 0x7f
++end
++
++local function keyboardEvent(sev)
++    local flags = getEventIv(sev, C.SCREEN_PROPERTY_KEY_FLAGS)
++    local cap = getEventIv(sev, C.SCREEN_PROPERTY_KEY_CAP)
++    local sym = getEventIv(sev, C.SCREEN_PROPERTY_KEY_SYM)
++    local cap_valid = bit.band(flags, C.KEY_CAP_VALID) ~= 0
++    local sym_valid = bit.band(flags, C.KEY_SYM_VALID) ~= 0
++    if not cap_valid then
++        return
++    end
++    if bit.band(flags, C.KEY_DOWN) ~= 0 then
++        -- Use the key cap (the unshifted character, or a KEYCODE_*), like SDL keycodes,
++        -- except for the symbols typed with Alt on the Q10's keyboard.
++        local code = cap
++        if sym_valid and isPrintable(sym) and isPrintable(cap) and sym ~= cap
++            and not (cap >= 0x61 and cap <= 0x7a and sym == cap - 0x20) then
++            code = sym
++        end
++        local repeated = bit.band(flags, C.KEY_REPEAT) ~= 0
++        pressed[cap] = code
++        genEmuEvent(C.EV_KEY, code, repeated and 2 or 1)
++    else
++        genEmuEvent(C.EV_KEY, pressed[cap] or cap, 0)
++        pressed[cap] = nil
++    end
++end
++
++local function screenEvent(event)
++    local sev = bb10.bps.screen_event_get_event(event)
++    local evtype = getEventIv(sev, C.SCREEN_PROPERTY_TYPE)
++    if evtype == C.SCREEN_EVENT_MTOUCH_TOUCH
++        or evtype == C.SCREEN_EVENT_MTOUCH_MOVE
++        or evtype == C.SCREEN_EVENT_MTOUCH_RELEASE then
++        touchEvent(sev, evtype)
++    elseif evtype == C.SCREEN_EVENT_KEYBOARD then
++        keyboardEvent(sev)
++    end
++end
++
++local function navigatorEvent(event)
++    local code = bb10.bps.bps_event_get_code(event)
++    if code == C.NAVIGATOR_EXIT then
++        genEmuEvent(C.EV_MSC, input.MSC_EXIT, 0)
++    elseif code == C.NAVIGATOR_WINDOW_STATE then
++        genEmuEvent(C.EV_MSC, input.MSC_WINDOW_STATE, bb10.bps.navigator_event_get_window_state(event))
++    elseif code == C.NAVIGATOR_SWIPE_DOWN then
++        genEmuEvent(C.EV_MSC, input.MSC_SWIPE_DOWN, 0)
++    elseif code == C.NAVIGATOR_LOW_MEMORY then
++        genEmuEvent(C.EV_MSC, input.MSC_LOW_MEMORY, 0)
++    elseif code == C.NAVIGATOR_DEVICE_LOCK_STATE then
++        genEmuEvent(C.EV_MSC, input.MSC_DEVICE_LOCK, 0)
++    elseif code == C.NAVIGATOR_ORIENTATION_CHECK then
++        -- Square display: we never rotate along with the device.
++        bb10.bps.navigator_orientation_check_response(event, false)
++    end
++end
++
++local event = ffi.new("bps_event_t *[1]")
++
++local function handleEvent()
++    local domain = bb10.bps.bps_event_get_domain(event[0])
++    if domain == bb10.screen_domain then
++        screenEvent(event[0])
++    elseif domain == bb10.navigator_domain then
++        navigatorEvent(event[0])
++    end
++end
++
++function input.waitForEvent(sec, usec)
++    local timeout = sec and math.floor((sec * 1000000 + usec) / 1000 + 0.5) or -1
++
++    inputQueue = {}
++
++    if bb10.bps.bps_get_event(event, timeout) ~= C.BPS_SUCCESS then
++        return
++    end
++    if event[0] == nil then
++        return false, C.ETIME
++    end
++    handleEvent()
++    -- Drain what's already pending.
++    while bb10.bps.bps_get_event(event, 0) == C.BPS_SUCCESS and event[0] ~= nil do
++        handleEvent()
++    end
++
++    if #inputQueue > 0 then
++        return true, inputQueue
++    else
++        return false, C.EINTR
++    end
++end
++
++return input
+-- 
+2.56.0
+

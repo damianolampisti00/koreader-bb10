@@ -1,0 +1,272 @@
+From 4113a738fa750625b973bd38685dc5517135ad98 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:10:05 +0100
+Subject: [PATCH 1/2] Add BlackBerry 10 (Q10) device
+
+Probed on QNX (ffi.os POSIX + /pps/services); bb10 framebuffer/input
+from base, battery via BPS, navigator exit/minimize handling, Q10 key
+map, shell launcher (platform/bb10/koreader.sh).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ base                               |  2 +-
+ frontend/device.lua                |  5 ++
+ frontend/device/bb10/device.lua    | 78 ++++++++++++++++++++++++++++++
+ frontend/device/bb10/event_map.lua | 65 +++++++++++++++++++++++++
+ frontend/device/bb10/powerd.lua    | 23 +++++++++
+ frontend/device/generic/device.lua |  1 +
+ frontend/device/input.lua          |  2 +
+ platform/bb10/koreader.sh          |  6 +++
+ 8 files changed, 181 insertions(+), 1 deletion(-)
+ create mode 100644 frontend/device/bb10/device.lua
+ create mode 100644 frontend/device/bb10/event_map.lua
+ create mode 100644 frontend/device/bb10/powerd.lua
+ create mode 100755 platform/bb10/koreader.sh
+
+diff --git a/base b/base
+index 6e4bc81af..40ca6e733 160000
+--- a/base
++++ b/base
+@@ -1 +1 @@
+-Subproject commit 6e4bc81af4e04f78d81677a323a780a71b29702a
++Subproject commit 40ca6e73322e063f343081eeaf5dd0aa9b8e2ed8
+diff --git a/frontend/device.lua b/frontend/device.lua
+index 52765b9d7..a2cc5b181 100644
+--- a/frontend/device.lua
++++ b/frontend/device.lua
+@@ -37,6 +37,11 @@ local function probeDevice()
+         return require("device/cervantes/device")
+     end
+ 
++    -- BlackBerry 10 (QNX: LuaJIT says "POSIX"), recognized by its PPS tree.
++    if require("ffi").os == "POSIX" and lfs.attributes("/pps/services") then
++        return require("device/bb10/device")
++    end
++
+     -- add new ports here:
+     --
+     -- if --[[ implement a proper test instead --]] false then
+diff --git a/frontend/device/bb10/device.lua b/frontend/device/bb10/device.lua
+new file mode 100644
+index 000000000..95c16c8b7
+--- /dev/null
++++ b/frontend/device/bb10/device.lua
+@@ -0,0 +1,78 @@
++local Event = require("ui/event")
++local Generic = require("device/generic/device")
++local UIManager
++local bb10 = require("ffi/bb10")
++local ffi = require("ffi")
++local logger = require("logger")
++
++local function yes() return true end
++local function no() return false end
++
++local Device = Generic:extend{
++    model = "BlackBerry Q10",
++    isBB10 = yes,
++    home_dir = "/accounts/1000/shared",
++    display_dpi = 330,
++    hasKeyboard = yes,
++    hasKeys = yes,
++    hasDPad = no,
++    isTouchDevice = yes,
++    hasColorScreen = yes,
++    hasEinkScreen = no,
++    -- RGBX8888 is BGRX in memory (little endian).
++    hasBGRFrameBuffer = yes,
++    hasFrontlight = no,
++    hasWifiToggle = no,
++    hasSeamlessWifiToggle = no,
++    canSuspend = no,
++    canStandby = no,
++    canReboot = no,
++    canPowerOff = no,
++    canRestart = no,
++    needsScreenRefreshAfterResume = no,
++    canOpenLink = yes,
++    openLink = function(self, link)
++        return bb10.openLink(link)
++    end,
++}
++
++function Device:init()
++    UIManager = require("ui/uimanager")
++    self.screen = require("ffi/framebuffer_bb10"):new{device = self, debug = logger.dbg}
++    self.powerd = require("device/bb10/powerd"):new{device = self}
++    local bb10_input = require("ffi/input_bb10")
++    self.input = require("device/input"):new{
++        device = self,
++        event_map = require("device/bb10/event_map"),
++        handleMiscEv = function(this, ev)
++            if ev.code == bb10_input.MSC_EXIT then
++                logger.info("BB10: navigator exit")
++                UIManager:broadcastEvent(Event:new("FlushSettings"))
++                UIManager:quit()
++            elseif ev.code == bb10_input.MSC_WINDOW_STATE then
++                local state = ffi.C.NAVIGATOR_WINDOW_FULLSCREEN
++                if ev.value == state then
++                    bb10.setKeepAwake(true)
++                    this.device.screen:_updateWindow()
++                else
++                    -- Minimized to an active frame (or hidden): we may be killed without notice.
++                    bb10.setKeepAwake(false)
++                    this.device.input:resetState()
++                    UIManager:broadcastEvent(Event:new("FlushSettings"))
++                end
++            elseif ev.code == bb10_input.MSC_LOW_MEMORY then
++                UIManager:broadcastEvent(Event:new("FlushSettings"))
++            end
++        end,
++    }
++    Generic.init(self)
++end
++
++function Device:exit()
++    Generic.exit(self)
++    if self.screen then
++        self.screen:close()
++    end
++end
++
++return Device
+diff --git a/frontend/device/bb10/event_map.lua b/frontend/device/bb10/event_map.lua
+new file mode 100644
+index 000000000..23ef6c74e
+--- /dev/null
++++ b/frontend/device/bb10/event_map.lua
+@@ -0,0 +1,65 @@
++-- BlackBerry 10 key caps: Unicode for printable keys (like SDL keycodes), KEYCODE_* (sys/keycodes.h) otherwise.
++return {
++    [ 97] = "A", [ 98] = "B", [ 99] = "C", [100] = "D", [101] = "E", [102] = "F",
++    [103] = "G", [104] = "H", [105] = "I", [106] = "J", [107] = "K", [108] = "L",
++    [109] = "M", [110] = "N", [111] = "O", [112] = "P", [113] = "Q", [114] = "R",
++    [115] = "S", [116] = "T", [117] = "U", [118] = "V", [119] = "W", [120] = "X",
++    [121] = "Y", [122] = "Z",
++
++    [48] = "0", [49] = "1", [50] = "2", [51] = "3", [52] = "4",
++    [53] = "5", [54] = "6", [55] = "7", [56] = "8", [57] = "9",
++
++    [33] = "!",
++    [34] = "\"",
++    [35] = "#",
++    [36] = "$",
++    [37] = "%",
++    [38] = "&",
++    [39] = "'",
++    [40] = "(",
++    [41] = ")",
++    [42] = "*",
++    [43] = "+",
++    [44] = ",",
++    [45] = "-",
++    [46] = ".",
++    [47] = "/",
++
++    [58] = ":",
++    [59] = ";",
++    [60] = "<",
++    [61] = "=",
++    [62] = ">",
++    [63] = "?",
++    [64] = "@",
++
++    [91] = "[",
++    [92] = "\\",
++    [93] = "]",
++    [94] = "^",
++    [95] = "_",
++    [96] = "`",
++
++    [32] = " ",
++
++    [0xF008] = "Backspace", -- KEYCODE_BACKSPACE
++    [0xF00D] = "Press", -- KEYCODE_RETURN
++    [0xF01B] = "Back", -- KEYCODE_ESCAPE
++    [0xF0FF] = "Del", -- KEYCODE_DELETE
++    [0xF0E1] = "Shift", -- KEYCODE_LEFT_SHIFT
++    [0xF0E2] = "Shift", -- KEYCODE_RIGHT_SHIFT
++    [0xF0E9] = "Alt", -- KEYCODE_LEFT_ALT
++    [0xF0EA] = "Alt", -- KEYCODE_RIGHT_ALT
++    [0xF052] = "Up", -- KEYCODE_UP
++    [0xF054] = "Down", -- KEYCODE_DOWN
++    [0xF051] = "Left", -- KEYCODE_LEFT
++    [0xF053] = "Right", -- KEYCODE_RIGHT
++    [0xF055] = "LPgBack", -- KEYCODE_PG_UP
++    [0xF056] = "LPgFwd", -- KEYCODE_PG_DOWN
++    [0xF067] = "Menu", -- KEYCODE_MENU
++
++    -- Side keys.
++    [0xF21D] = "RPgBack", -- KEYCODE_VOLUME_UP
++    [0xF21E] = "RPgFwd", -- KEYCODE_VOLUME_DOWN
++    [0xF210] = "Menu", -- KEYCODE_PLAY (the key between the volume keys)
++}
+diff --git a/frontend/device/bb10/powerd.lua b/frontend/device/bb10/powerd.lua
+new file mode 100644
+index 000000000..2974d3f36
+--- /dev/null
++++ b/frontend/device/bb10/powerd.lua
+@@ -0,0 +1,23 @@
++local BasePowerD = require("device/generic/powerd")
++local bb10 = require("ffi/bb10")
++
++local BB10PowerD = BasePowerD:new{}
++
++function BB10PowerD:frontlightIntensityHW()
++    return 0
++end
++
++function BB10PowerD:setIntensityHW(intensity) -- luacheck: ignore
++end
++
++function BB10PowerD:getCapacityHW()
++    local capacity = bb10.getBatteryInfo()
++    return capacity or 0
++end
++
++function BB10PowerD:isChargingHW()
++    local _, charging = bb10.getBatteryInfo()
++    return charging or false
++end
++
++return BB10PowerD
+diff --git a/frontend/device/generic/device.lua b/frontend/device/generic/device.lua
+index c8f4535e3..009498e5b 100644
+--- a/frontend/device/generic/device.lua
++++ b/frontend/device/generic/device.lua
+@@ -150,6 +150,7 @@ local Device = {
+     -- device/<devicetype>/device.lua file
+     -- (these are functions!)
+     isAndroid = no,
++    isBB10 = no,
+     isCervantes = no,
+     isKindle = no,
+     isKobo = no,
+diff --git a/frontend/device/input.lua b/frontend/device/input.lua
+index 0e24cbf08..037b290ab 100644
+--- a/frontend/device/input.lua
++++ b/frontend/device/input.lua
+@@ -232,6 +232,8 @@ function Input:init()
+         end
+     elseif self.device:isAndroid() then
+         self.input = require("ffi/input_android")
++    elseif self.device:isBB10() then
++        self.input = require("ffi/input_bb10")
+     elseif self.device:isPocketBook() then
+         self.input = require("ffi/input_pocketbook")
+     elseif self.device:isRemarkable() and os.getenv("KO_USE_QTFB") == "1" then
+diff --git a/platform/bb10/koreader.sh b/platform/bb10/koreader.sh
+new file mode 100755
+index 000000000..88849bebd
+--- /dev/null
++++ b/platform/bb10/koreader.sh
+@@ -0,0 +1,6 @@
++#!/bin/sh
++# KOReader launcher for BlackBerry 10, from a shell (e.g. Term49, or ssh).
++cd "${0%/*}" || exit 1
++export LD_LIBRARY_PATH="$PWD/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
++export TESSDATA_PREFIX="$PWD/data"
++exec ./luajit reader.lua "$@"
+-- 
+2.56.0
+

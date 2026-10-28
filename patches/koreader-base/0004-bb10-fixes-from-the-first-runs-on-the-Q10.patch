@@ -1,0 +1,126 @@
+From 21d08ca581f90347278998155945503db0dc48ba Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:37:07 +0100
+Subject: [PATCH 4/4] bb10: fixes from the first runs on the Q10
+
+- loadlib: QNX (ffi.os POSIX) uses versioned libs/ like Linux.
+- util: no setpriority on QNX.
+- posix_h qnx_arm: replace BSD u_* types.
+- bb10: SCREEN_PROPERTY_DPI is an int pair (heap corruption at exit).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi-cdecl/posix_cdecl.c       |  4 ++++
+ ffi-cdecl/posix_h_qnx_arm.lua |  2 +-
+ ffi/bb10.lua                  |  3 ++-
+ ffi/loadlib.lua               |  2 +-
+ ffi/posix_h.lua               | 14 +-------------
+ ffi/util.lua                  |  5 ++++-
+ 6 files changed, 13 insertions(+), 17 deletions(-)
+
+diff --git a/ffi-cdecl/posix_cdecl.c b/ffi-cdecl/posix_cdecl.c
+index 35e5fce0..e4fcfa0d 100644
+--- a/ffi-cdecl/posix_cdecl.c
++++ b/ffi-cdecl/posix_cdecl.c
+@@ -129,6 +129,10 @@ cdecl_type_replace(_Uint8t, uint8_t);
+ cdecl_type_replace(_Uint16t, uint16_t);
+ cdecl_type_replace(_Uint32t, uint32_t);
+ cdecl_type_replace(_Uint64t, uint64_t);
++cdecl_type_replace(u_char, unsigned char);
++cdecl_type_replace(u_short, unsigned short);
++cdecl_type_replace(u_int, unsigned);
++cdecl_type_replace(u_long, unsigned long);
+ #endif
+ 
+ cdecl_const(EAGAIN);
+diff --git a/ffi-cdecl/posix_h_qnx_arm.lua b/ffi-cdecl/posix_h_qnx_arm.lua
+index 4de499c1..53c668b1 100644
+--- a/ffi-cdecl/posix_h_qnx_arm.lua
++++ b/ffi-cdecl/posix_h_qnx_arm.lua
+@@ -230,7 +230,7 @@ struct sockaddr_storage {
+ struct ifaddrs {
+   struct ifaddrs *ifa_next;
+   char *ifa_name;
+-  u_int ifa_flags;
++  unsigned ifa_flags;
+   struct sockaddr *ifa_addr;
+   struct sockaddr *ifa_netmask;
+   struct sockaddr *ifa_dstaddr;
+diff --git a/ffi/bb10.lua b/ffi/bb10.lua
+index 2fd452ab..74ad1efd 100644
+--- a/ffi/bb10.lua
++++ b/ffi/bb10.lua
+@@ -73,7 +73,8 @@ function bb10.init()
+ 
+     local disp = ffi.new("screen_display_t[1]")
+     if S.screen_get_window_property_pv(bb10.win, C.SCREEN_PROPERTY_DISPLAY, ffi.cast("void **", disp)) == 0 then
+-        local dpi = ffi.new("int[1]")
++        -- NOTE: the DPI property is a (horizontal, vertical) pair.
++        local dpi = ffi.new("int[2]")
+         if S.screen_get_display_property_iv(disp[0], C.SCREEN_PROPERTY_DPI, dpi) == 0 and dpi[0] > 0 then
+             bb10.dpi = dpi[0]
+         end
+diff --git a/ffi/loadlib.lua b/ffi/loadlib.lua
+index 175d22c0..508967d3 100644
+--- a/ffi/loadlib.lua
++++ b/ffi/loadlib.lua
+@@ -137,7 +137,7 @@ if android then
+             return package.loadlib(path, "luaopen_" .. modulename:sub(18))
+         end)
+     end
+-elseif ffi.os == "Linux" then
++elseif ffi.os == "Linux" or ffi.os == "POSIX" then -- POSIX: QNX (BlackBerry 10)
+     lib_search_path = "libs/?"
+     -- Unversioned: libz.so
+     lib_basic_format = "lib%s.so"
+diff --git a/ffi/posix_h.lua b/ffi/posix_h.lua
+index 8552879a..b3145f5d 100644
+--- a/ffi/posix_h.lua
++++ b/ffi/posix_h.lua
+@@ -742,7 +742,7 @@ struct ifaddrs {
+   void *ifa_data;
+ };
+ ]]
+-elseif --[[ macos ]] platform == 0x80 then
++elseif --[[ macos|qnx_arm ]] bit.band(platform, 0x180) ~= 0 then
+ ffi.cdef[[
+ struct ifaddrs {
+   struct ifaddrs *ifa_next;
+@@ -754,18 +754,6 @@ struct ifaddrs {
+   void *ifa_data;
+ };
+ ]]
+-elseif --[[ qnx_arm ]] platform == 0x100 then
+-ffi.cdef[[
+-struct ifaddrs {
+-  struct ifaddrs *ifa_next;
+-  char *ifa_name;
+-  u_int ifa_flags;
+-  struct sockaddr *ifa_addr;
+-  struct sockaddr *ifa_netmask;
+-  struct sockaddr *ifa_dstaddr;
+-  void *ifa_data;
+-};
+-]]
+ end
+ 
+ if --[[ macos ]] platform == 0x80 then
+diff --git a/ffi/util.lua b/ffi/util.lua
+index 2b600a93..3af11a74 100644
+--- a/ffi/util.lua
++++ b/ffi/util.lua
+@@ -407,7 +407,10 @@ function util.runInSubProcess(func, with_pipe, double_fork)
+                 C.sched_setscheduler(0, C.SCHED_BATCH, param)
+             end
+             -- And nice it at lower priority, too (unlike the above call, this is POSIX).
+-            C.setpriority(C.PRIO_PROCESS, 0, 5)
++            -- (Except that QNX doesn't provide it.)
++            if ffi.os ~= "POSIX" then
++                C.setpriority(C.PRIO_PROCESS, 0, 5)
++            end
+ 
+             -- Just run the provided lua code object in this new process,
+             -- and exit immediatly (so we do not release drivers and
+-- 
+2.56.0
+

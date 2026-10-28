@@ -1,0 +1,48 @@
+From 834530f36e4af09b2ef112c7e52741cfff78a90b Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:37:07 +0100
+Subject: [PATCH 2/2] bb10: lazy UIManager require (circular dependency)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ base                            | 2 +-
+ frontend/device/bb10/device.lua | 3 +--
+ 2 files changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/base b/base
+index 40ca6e733..21d08ca58 160000
+--- a/base
++++ b/base
+@@ -1 +1 @@
+-Subproject commit 40ca6e73322e063f343081eeaf5dd0aa9b8e2ed8
++Subproject commit 21d08ca581f90347278998155945503db0dc48ba
+diff --git a/frontend/device/bb10/device.lua b/frontend/device/bb10/device.lua
+index 95c16c8b7..de0207ca8 100644
+--- a/frontend/device/bb10/device.lua
++++ b/frontend/device/bb10/device.lua
+@@ -1,6 +1,5 @@
+ local Event = require("ui/event")
+ local Generic = require("device/generic/device")
+-local UIManager
+ local bb10 = require("ffi/bb10")
+ local ffi = require("ffi")
+ local logger = require("logger")
+@@ -37,7 +36,6 @@ local Device = Generic:extend{
+ }
+ 
+ function Device:init()
+-    UIManager = require("ui/uimanager")
+     self.screen = require("ffi/framebuffer_bb10"):new{device = self, debug = logger.dbg}
+     self.powerd = require("device/bb10/powerd"):new{device = self}
+     local bb10_input = require("ffi/input_bb10")
+@@ -45,6 +43,7 @@ function Device:init()
+         device = self,
+         event_map = require("device/bb10/event_map"),
+         handleMiscEv = function(this, ev)
++            local UIManager = require("ui/uimanager")
+             if ev.code == bb10_input.MSC_EXIT then
+                 logger.info("BB10: navigator exit")
+                 UIManager:broadcastEvent(Event:new("FlushSettings"))
+-- 
+2.56.0
+
