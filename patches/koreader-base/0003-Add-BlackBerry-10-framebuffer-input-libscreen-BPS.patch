@@ -1,7 +1,7 @@
 From 40ca6e73322e063f343081eeaf5dd0aa9b8e2ed8 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 21:10:05 +0100
-Subject: [PATCH 3/4] Add BlackBerry 10 framebuffer & input (libscreen + BPS)
+Subject: [PATCH 3/5] Add BlackBerry 10 framebuffer & input (libscreen + BPS)
 
 - ffi/bb10_h: libscreen, BPS (navigator, battery) & keycodes cdecls (ffi-cdecl).
 - ffi/bb10: shared libscreen window + BPS init, battery, navigator_invoke.

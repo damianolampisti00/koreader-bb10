@@ -1,0 +1,159 @@
+From 81618aa8cb3869a4c7a47bc3771cae8b989cd267 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 00:10:42 +0100
+Subject: [PATCH 5/5] bb10: side keys via the BPS button service, fix night
+ mode
+
+- Volume +/- and play/pause never reach the window as keyboard events:
+  request BPS button events, and map them to the KEYCODE_* the device's
+  event map already knows.
+- Night mode: the shadow buffer's content is already inverted, so copy it
+  1:1 (invertblitFrom inverted it back).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi-cdecl/bb10_cdecl.c   | 11 +++++++++++
+ ffi/bb10.lua             |  4 ++++
+ ffi/bb10_h.lua           | 12 ++++++++++++
+ ffi/framebuffer_bb10.lua | 10 +++-------
+ ffi/input_bb10.lua       | 16 ++++++++++++++++
+ 5 files changed, 46 insertions(+), 7 deletions(-)
+
+diff --git a/ffi-cdecl/bb10_cdecl.c b/ffi-cdecl/bb10_cdecl.c
+index fa63e047..9b84df37 100644
+--- a/ffi-cdecl/bb10_cdecl.c
++++ b/ffi-cdecl/bb10_cdecl.c
+@@ -2,6 +2,7 @@
+ 
+ #include <bps/battery.h>
+ #include <bps/bps.h>
++#include <bps/button.h>
+ #include <bps/event.h>
+ #include <bps/navigator.h>
+ #include <bps/screen.h>
+@@ -121,6 +122,16 @@ cdecl_func(navigator_invoke);
+ cdecl_func(navigator_close_window);
+ cdecl_func(navigator_extend_terminate);
+ 
++cdecl_const(BUTTON_UP);
++cdecl_const(BUTTON_DOWN);
++
++cdecl_type(button_physical_t);
++
++cdecl_func(button_request_events);
++cdecl_func(button_stop_events);
++cdecl_func(button_get_domain);
++cdecl_func(button_event_get_button);
++
+ cdecl_const(BATTERY_INFO);
+ cdecl_const(BATTERY_CHARGING_NOT_CHARGING);
+ cdecl_const(BATTERY_CHARGING_TRICKLE_CHARGING);
+diff --git a/ffi/bb10.lua b/ffi/bb10.lua
+index 74ad1efd..aae16be9 100644
+--- a/ffi/bb10.lua
++++ b/ffi/bb10.lua
+@@ -86,10 +86,13 @@ function bb10.init()
+     end
+     B.screen_request_events(bb10.ctx)
+     B.navigator_request_events(0)
++    -- The side keys (volume +/-, play/pause) only come through the button service.
++    B.button_request_events(0)
+     -- The Q10's display is square: never let the navigator rotate us.
+     B.navigator_rotation_lock(true)
+     bb10.screen_domain = B.screen_get_domain()
+     bb10.navigator_domain = B.navigator_get_domain()
++    bb10.button_domain = B.button_get_domain()
+ end
+ 
+ function bb10.setKeepAwake(keep_awake)
+@@ -125,6 +128,7 @@ function bb10.shutdown()
+     end
+     bb10.bps.screen_stop_events(bb10.ctx)
+     bb10.bps.navigator_stop_events(0)
++    bb10.bps.button_stop_events(0)
+     bb10.bps.bps_shutdown()
+     bb10.screen.screen_destroy_window(bb10.win)
+     bb10.screen.screen_destroy_context(bb10.ctx)
+diff --git a/ffi/bb10_h.lua b/ffi/bb10_h.lua
+index f030d289..ae9e844b 100644
+--- a/ffi/bb10_h.lua
++++ b/ffi/bb10_h.lua
+@@ -97,6 +97,18 @@ int navigator_rotation_lock(bool);
+ int navigator_invoke(const char *, char **);
+ int navigator_close_window(void);
+ int navigator_extend_terminate(void);
++static const unsigned BUTTON_UP = 0;
++static const unsigned BUTTON_DOWN = 1;
++typedef enum {
++  BUTTON_POWER = 0,
++  BUTTON_PLAYPAUSE = 1,
++  BUTTON_PLUS = 2,
++  BUTTON_MINUS = 3,
++} button_physical_t;
++int button_request_events(int);
++int button_stop_events(int);
++int button_get_domain();
++int button_event_get_button(bps_event_t *);
+ static const unsigned BATTERY_INFO = 1;
+ static const unsigned BATTERY_CHARGING_NOT_CHARGING = 0;
+ static const unsigned BATTERY_CHARGING_TRICKLE_CHARGING = 1;
+diff --git a/ffi/framebuffer_bb10.lua b/ffi/framebuffer_bb10.lua
+index 57b71ac3..8eea37d8 100644
+--- a/ffi/framebuffer_bb10.lua
++++ b/ffi/framebuffer_bb10.lua
+@@ -21,15 +21,11 @@ end
+ function framebuffer:_updateWindow()
+     local bb = self.window_bb
+     local ext_bb = self.full_bb or self.bb
+-    -- Clone the shadow buffer's rotation & inverse settings, so that the blit below is a 1:1 copy.
++    -- Clone the shadow buffer's rotation & inverse settings, so that the blit below is a 1:1 copy:
++    -- in night mode, the shadow buffer's content is already inverted (like on SDL).
+     bb:setInverse(ext_bb:getInverse())
+     bb:setRotation(ext_bb:getRotation())
+-    if bb:getInverse() == 1 and BB:getUseCBB() then
+-        -- The CBB ignores the invert flag: apply it now.
+-        bb:invertblitFrom(ext_bb)
+-    else
+-        bb:blitFrom(ext_bb)
+-    end
++    bb:blitFrom(ext_bb)
+     bb10.post()
+ end
+ 
+diff --git a/ffi/input_bb10.lua b/ffi/input_bb10.lua
+index d4d8c65e..52f4ef24 100644
+--- a/ffi/input_bb10.lua
++++ b/ffi/input_bb10.lua
+@@ -130,6 +130,20 @@ local function navigatorEvent(event)
+     end
+ end
+ 
++-- Side keys, as their sys/keycodes.h KEYCODE_* (see the device's event map).
++local button_keycodes = {
++    [C.BUTTON_PLUS] = C.KEYCODE_VOLUME_UP,
++    [C.BUTTON_MINUS] = C.KEYCODE_VOLUME_DOWN,
++    [C.BUTTON_PLAYPAUSE] = C.KEYCODE_PLAY,
++}
++
++local function buttonEvent(event)
++    local code = button_keycodes[tonumber(bb10.bps.button_event_get_button(event))]
++    if code then
++        genEmuEvent(C.EV_KEY, code, bb10.bps.bps_event_get_code(event) == C.BUTTON_DOWN and 1 or 0)
++    end
++end
++
+ local event = ffi.new("bps_event_t *[1]")
+ 
+ local function handleEvent()
+@@ -138,6 +152,8 @@ local function handleEvent()
+         screenEvent(event[0])
+     elseif domain == bb10.navigator_domain then
+         navigatorEvent(event[0])
++    elseif domain == bb10.button_domain then
++        buttonEvent(event[0])
+     end
+ end
+ 
+-- 
+2.56.0
+
