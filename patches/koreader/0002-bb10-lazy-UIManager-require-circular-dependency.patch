@@ -1,7 +1,7 @@
 From 834530f36e4af09b2ef112c7e52741cfff78a90b Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 21:37:07 +0100
-Subject: [PATCH 2/3] bb10: lazy UIManager require (circular dependency)
+Subject: [PATCH 2/4] bb10: lazy UIManager require (circular dependency)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

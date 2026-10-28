@@ -26,7 +26,7 @@ docker run --rm --network none \
     -v "$K/tc/gcc-9.3.0-berrycore:/opt/qnx800:ro" -v "$K/sysinc:/opt/sysinc:ro" \
     -v "$K/scripts:/scripts:ro" -v "$K/src/platform/bb10:/src:ro" -v "$STAGE:/out" \
     kobuild:trixie bash -c '. /scripts/gcc9-env.sh; export QNX_INC=/opt/sysinc;
-        $QNX_ABI-gcc -O2 -march=armv7-a -mthumb -mfloat-abi=softfp -mfpu=neon -fPIE -pie -Wall \
+        $QNX_ABI-gcc -O2 -march=armv7-a -mthumb -mfloat-abi=softfp -mfpu=neon -fPIE -pie -static-libgcc -Wall \
             /src/launcher.c -o /out/koreader-launcher && $QNX_ABI-strip /out/koreader-launcher'
 
 cp "$TREE/resources/koreader.png" "$STAGE/icon.png"
