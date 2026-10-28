@@ -27,6 +27,17 @@ with base's patches + `patches/luajit/qnx-host-os.patch`.
   - `-D_NO_CPP_INLINES` for C++ (Dinkum math overloads vs libstdc++ `<cmath>`);
   - excluded for now: czmq/libzmq, sdcv/glib (dictionary), tar.
   Still to check: loading every lib on the Q10 (`tests/base/dltest.lua`, phone was offline).
-- Next: phase 4/5, QNX FFI cdecls (`ffi/posix_h`) and the bb10 device/framebuffer/input.
+- Phase 4 (FFI): `ffi/posix_h` gains `qnx_arm`, `ffi/bb10_h` covers libscreen/BPS/keycodes, both
+  generated with ffi-cdecl against the NDK headers (`scripts/build-host-tools.sh` once, then
+  `scripts/gen-ffi.sh`).
+- Phase 5 (device): `ffi/bb10.lua`, `ffi/framebuffer_bb10.lua`, `ffi/input_bb10.lua` (base) and
+  `frontend/device/bb10/` (koreader, branch `bb10`). KOReader v2026.07.2 starts on the Q10 from a
+  shell (`koreader.sh`, in /accounts/1000/shared/misc/kotest/koreader), JIT on, file manager &
+  quickstart shown. Crash found & fixed: SCREEN_PROPERTY_DPI writes an int *pair*.
+  Not verified yet: touch/keys reach the window (no input seen while the phone was idle/locked).
+- Packaging: `scripts/build-koreader.sh` assembles the tree, `scripts/package-bar.sh <buildId>`
+  makes `bar/KOReader-<ver>.<id>-armv7.bar` (launcher `platform/bb10/launcher.c`: KO_HOME in the
+  sandbox's data/, log in logs/koreader.log). Install: `bb10-install <bar>` (phone unlocked).
+- Patch series: `patches/koreader-base/` (vs tag base 6e4bc81a) and `patches/koreader/` (vs v2026.07.2).
 
 On the phone, test binaries live in /accounts/1000/shared/misc/kotest (not /tmp: noexec).

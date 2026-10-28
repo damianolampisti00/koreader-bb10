@@ -1,0 +1,99 @@
+From db4a014ad4b841bd3e246542fe7858de2bdc4f41 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:42:45 +0100
+Subject: [PATCH 3/3] bb10: BAR launcher and bar-descriptor template
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ platform/bb10/bar-descriptor.xml.in | 25 ++++++++++++++++
+ platform/bb10/launcher.c            | 46 +++++++++++++++++++++++++++++
+ 2 files changed, 71 insertions(+)
+ create mode 100644 platform/bb10/bar-descriptor.xml.in
+ create mode 100644 platform/bb10/launcher.c
+
+diff --git a/platform/bb10/bar-descriptor.xml.in b/platform/bb10/bar-descriptor.xml.in
+new file mode 100644
+index 000000000..9fc1e1cfc
+--- /dev/null
++++ b/platform/bb10/bar-descriptor.xml.in
+@@ -0,0 +1,25 @@
++<?xml version="1.0" encoding="utf-8" standalone="no"?>
++<qnx xmlns="http://www.qnx.com/schemas/application/1.0">
++    <id>org.koreader.bb10</id>
++    <name>KOReader</name>
++    <versionNumber>@VERSION@</versionNumber>
++    <buildId>@BUILD_ID@</buildId>
++    <description>KOReader document viewer (BlackBerry 10 port)</description>
++    <author>KOReader BB10 port</author>
++    <initialWindow>
++        <autoOrients>false</autoOrients>
++        <systemChrome>none</systemChrome>
++    </initialWindow>
++    <configuration name="Device-Release">
++       <platformArchitecture>armle-v7</platformArchitecture>
++       <asset path="koreader-launcher" entry="true" type="Qnx/Elf">koreader-launcher</asset>
++    </configuration>
++    <icon>
++        <image>icon.png</image>
++    </icon>
++    <asset path="icon.png">icon.png</asset>
++@ASSETS@
++    <permission system="true">run_native</permission>
++    <permission>access_shared</permission>
++    <permission>access_internet</permission>
++</qnx>
+diff --git a/platform/bb10/launcher.c b/platform/bb10/launcher.c
+new file mode 100644
+index 000000000..7fe1a8ed6
+--- /dev/null
++++ b/platform/bb10/launcher.c
+@@ -0,0 +1,46 @@
++/*
++ * KOReader launcher: the BlackBerry 10 BAR's entry point.
++ *
++ * Runs in the app sandbox (cwd), with KOReader installed (read-only) in
++ * app/native/koreader: keep settings & caches in data/koreader (KO_HOME),
++ * log to logs/koreader.log, then exec LuaJIT on reader.lua.
++ */
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++int main(int argc, char **argv)
++{
++    char sandbox[PATH_MAX], app[PATH_MAX], home[PATH_MAX], libs[PATH_MAX], tess[PATH_MAX];
++
++    (void)argc;
++    (void)argv;
++    if (!getcwd(sandbox, sizeof sandbox)) {
++        perror("getcwd");
++        return 1;
++    }
++    freopen("logs/koreader.log", "w", stdout);
++    freopen("logs/koreader.log", "a", stderr);
++    setvbuf(stdout, NULL, _IOLBF, 0);
++    setvbuf(stderr, NULL, _IONBF, 0);
++
++    snprintf(app, sizeof app, "%s/app/native/koreader", sandbox);
++    snprintf(home, sizeof home, "%s/data/koreader", sandbox);
++    snprintf(libs, sizeof libs, "%s/libs", app);
++    snprintf(tess, sizeof tess, "%s/data", app);
++    mkdir(home, 0755);
++    setenv("KO_HOME", home, 1);
++    setenv("LD_LIBRARY_PATH", libs, 1);
++    setenv("TESSDATA_PREFIX", tess, 1);
++
++    if (chdir(app) != 0) {
++        perror(app);
++        return 1;
++    }
++    char *args[] = { "luajit", "reader.lua", NULL };
++    execv("./luajit", args);
++    perror("execv ./luajit");
++    return 1;
++}
+-- 
+2.56.0
+
