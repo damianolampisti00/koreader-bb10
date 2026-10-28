@@ -1,7 +1,7 @@
 From 90fa65d4244f9201f2d4cd4caced4b1bad19ba46 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 00:29:28 +0100
-Subject: [PATCH 6/7] bb10: volume keys turn pages without changing the volume
+Subject: [PATCH 6/8] bb10: volume keys turn pages without changing the volume
 
 Grab the side keys in the foreground, release them when minimized.
 

@@ -1,7 +1,7 @@
 From d885af54e6356207fa687689cf758459ccd3f1e8 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 00:00:25 +0100
-Subject: [PATCH 4/7] bb10: set LD_LIBRARY_PATH for the BAR (the launcher needs
+Subject: [PATCH 4/8] bb10: set LD_LIBRARY_PATH for the BAR (the launcher needs
  libgcc_s)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

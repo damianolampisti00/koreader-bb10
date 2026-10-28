@@ -1,7 +1,7 @@
 From de3479e6079e560a51156127fb9f16ebe85754f6 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 00:29:28 +0100
-Subject: [PATCH 6/6] bb10: grab the side keys while in the foreground
+Subject: [PATCH 6/7] bb10: grab the side keys while in the foreground
 
 Register volume +/- and play/pause on PPS mediaplayer/control like
 bb::multimedia::MediaKeyWatcher (dat:json:{key:bn_<key>_short,

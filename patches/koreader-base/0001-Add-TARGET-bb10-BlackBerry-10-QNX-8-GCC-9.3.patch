@@ -1,7 +1,7 @@
 From 7eadb6f8c283aace11e8e6590d598c3c0c360938 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 20:43:04 +0100
-Subject: [PATCH 1/6] Add TARGET=bb10 (BlackBerry 10 / QNX 8, GCC 9.3)
+Subject: [PATCH 1/7] Add TARGET=bb10 (BlackBerry 10 / QNX 8, GCC 9.3)
 
 - Makefile.defs: bb10 target (arm-blackberry-qnx8eabi, Cortex-A9 softfp),
   CMAKE_SYSTEM_NAME QNX, meson system qnx, compat headers, _NO_CPP_INLINES.

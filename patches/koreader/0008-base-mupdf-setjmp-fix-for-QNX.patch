@@ -1,0 +1,20 @@
+From 8e71ec4ac9cfac5eaa001f64cb4600fdae3d37bd Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 00:53:32 +0100
+Subject: [PATCH 8/8] base: mupdf setjmp fix for QNX
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ base | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/base b/base
+index de3479e60..1d0a2f9bb 160000
+--- a/base
++++ b/base
+@@ -1 +1 @@
+-Subproject commit de3479e6079e560a51156127fb9f16ebe85754f6
++Subproject commit 1d0a2f9bb9f03641059a34196955a2183c466c1d
+-- 
+2.56.0
+

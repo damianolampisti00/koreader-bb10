@@ -1,7 +1,7 @@
 From 4aa96dd8b3cd5335f3cb9e406c3d3beb882ba987 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 21:02:36 +0100
-Subject: [PATCH 2/6] ffi/posix_h: add qnx_arm (BlackBerry 10)
+Subject: [PATCH 2/7] ffi/posix_h: add qnx_arm (BlackBerry 10)
 
 Generated with ffi-cdecl against the BB10 NDK headers (GCC 9.3 cross
 compiler); LuaJIT reports QNX as ffi.os == "POSIX".

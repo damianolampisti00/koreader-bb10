@@ -1,0 +1,59 @@
+From 1d0a2f9bb9f03641059a34196955a2183c466c1d Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 00:53:32 +0100
+Subject: [PATCH 7/7] mupdf: QNX's sigsetjmp/setjmp evaluate their argument
+ twice
+
+fz_try does fz_setjmp(*fz_push_try(ctx)): with QNX's macros, every try
+pushed twice and popped once ("exception stack overflow!", then a jump
+to NULL when opening a PDF). Use the _setjmp/_longjmp functions instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ thirdparty/mupdf/CMakeLists.txt    |  4 ++++
+ thirdparty/mupdf/bb10-setjmp.patch | 18 ++++++++++++++++++
+ 2 files changed, 22 insertions(+)
+ create mode 100644 thirdparty/mupdf/bb10-setjmp.patch
+
+diff --git a/thirdparty/mupdf/CMakeLists.txt b/thirdparty/mupdf/CMakeLists.txt
+index 41f51055..fa4b014b 100644
+--- a/thirdparty/mupdf/CMakeLists.txt
++++ b/thirdparty/mupdf/CMakeLists.txt
+@@ -22,6 +22,10 @@ list(APPEND PATCH_FILES
+     # Backport addition of `passthrough` member to `fz_device` (from b20077eb2).
+     passthrough_device.patch
+ )
++if(BB10)
++    # QNX's sigsetjmp/setjmp evaluate their argument twice: breaks fz_try.
++    list(APPEND PATCH_FILES bb10-setjmp.patch)
++endif()
+ 
+ # Remove unnecessary vendored thirdparty libraries.
+ list(APPEND PATCH_CMD COMMAND rm -rf
+diff --git a/thirdparty/mupdf/bb10-setjmp.patch b/thirdparty/mupdf/bb10-setjmp.patch
+new file mode 100644
+index 00000000..320d3334
+--- /dev/null
++++ b/thirdparty/mupdf/bb10-setjmp.patch
+@@ -0,0 +1,18 @@
++diff -ruN a/include/mupdf/fitz/system.h b/include/mupdf/fitz/system.h
++--- a/include/mupdf/fitz/system.h	2026-10-29 00:49:58.577540484 +0100
+++++ b/include/mupdf/fitz/system.h	2026-10-29 00:49:58.587221823 +0100
++@@ -145,7 +145,13 @@
++ 	variants. This makes a large speed difference on MacOSX (and
++ 	probably other platforms too.
++ */
++-#if HAVE_SIGSETJMP
+++#if defined(__QNX__)
+++/* QNX's sigsetjmp & setjmp are macros evaluating their argument twice,
+++   which breaks fz_try (fz_push_try would be called twice). */
+++#define fz_setjmp(BUF) _setjmp(BUF)
+++#define fz_longjmp(BUF,VAL) _longjmp(BUF,VAL)
+++typedef jmp_buf fz_jmp_buf;
+++#elif HAVE_SIGSETJMP
++ #define fz_setjmp(BUF) sigsetjmp(BUF, 0)
++ #define fz_longjmp(BUF,VAL) siglongjmp(BUF, VAL)
++ typedef sigjmp_buf fz_jmp_buf;
+-- 
+2.56.0
+

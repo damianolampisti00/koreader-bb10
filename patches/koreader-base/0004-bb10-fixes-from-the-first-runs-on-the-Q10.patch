@@ -1,7 +1,7 @@
 From 21d08ca581f90347278998155945503db0dc48ba Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 21:37:07 +0100
-Subject: [PATCH 4/6] bb10: fixes from the first runs on the Q10
+Subject: [PATCH 4/7] bb10: fixes from the first runs on the Q10
 
 - loadlib: QNX (ffi.os POSIX) uses versioned libs/ like Linux.
 - util: no setpriority on QNX.

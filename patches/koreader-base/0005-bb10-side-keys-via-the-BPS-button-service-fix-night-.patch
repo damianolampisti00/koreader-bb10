@@ -1,7 +1,7 @@
 From 81618aa8cb3869a4c7a47bc3771cae8b989cd267 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 00:10:42 +0100
-Subject: [PATCH 5/6] bb10: side keys via the BPS button service, fix night
+Subject: [PATCH 5/7] bb10: side keys via the BPS button service, fix night
  mode
 
 - Volume +/- and play/pause never reach the window as keyboard events:
