@@ -1,0 +1,50 @@
+From 90fa65d4244f9201f2d4cd4caced4b1bad19ba46 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 00:29:28 +0100
+Subject: [PATCH 6/6] bb10: volume keys turn pages without changing the volume
+
+Grab the side keys in the foreground, release them when minimized.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ base                            | 2 +-
+ frontend/device/bb10/device.lua | 5 +++++
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/base b/base
+index 81618aa8c..de3479e60 160000
+--- a/base
++++ b/base
+@@ -1 +1 @@
+-Subproject commit 81618aa8cb3869a4c7a47bc3771cae8b989cd267
++Subproject commit de3479e6079e560a51156127fb9f16ebe85754f6
+diff --git a/frontend/device/bb10/device.lua b/frontend/device/bb10/device.lua
+index de0207ca8..0096acaf4 100644
+--- a/frontend/device/bb10/device.lua
++++ b/frontend/device/bb10/device.lua
+@@ -52,10 +52,13 @@ function Device:init()
+                 local state = ffi.C.NAVIGATOR_WINDOW_FULLSCREEN
+                 if ev.value == state then
+                     bb10.setKeepAwake(true)
++                    bb10.grabSideKeys(true)
+                     this.device.screen:_updateWindow()
+                 else
+                     -- Minimized to an active frame (or hidden): we may be killed without notice.
+                     bb10.setKeepAwake(false)
++                    -- Give the volume keys back to the system.
++                    bb10.grabSideKeys(false)
+                     this.device.input:resetState()
+                     UIManager:broadcastEvent(Event:new("FlushSettings"))
+                 end
+@@ -65,6 +68,8 @@ function Device:init()
+         end,
+     }
+     Generic.init(self)
++    -- Volume keys turn pages instead of changing the volume (while we're in the foreground).
++    bb10.grabSideKeys(true)
+ end
+ 
+ function Device:exit()
+-- 
+2.56.0
+

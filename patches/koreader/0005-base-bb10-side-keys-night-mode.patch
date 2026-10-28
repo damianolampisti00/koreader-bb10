@@ -1,7 +1,7 @@
 From 1ba518f2430eae01304fadec42eca9c6d4714301 Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 00:10:42 +0100
-Subject: [PATCH 5/5] base: bb10 side keys & night mode
+Subject: [PATCH 5/6] base: bb10 side keys & night mode
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

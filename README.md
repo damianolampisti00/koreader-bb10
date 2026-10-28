@@ -34,9 +34,14 @@ with base's patches + `patches/luajit/qnx-host-os.patch`.
   `frontend/device/bb10/` (koreader, branch `bb10`). KOReader v2026.07.2 starts on the Q10 from a
   shell (`koreader.sh`, in /accounts/1000/shared/misc/kotest/koreader), JIT on, file manager &
   quickstart shown. Crash found & fixed: SCREEN_PROPERTY_DPI writes an int *pair*.
-  Not verified yet: touch/keys reach the window (no input seen while the phone was idle/locked).
+  Verified on the Q10 (as an installed app): touch, keyboard, colors, night mode, side keys.
+  - Side keys never come as keyboard events: BPS button service as fallback, and while in the
+    foreground they're "watched" on PPS /pps/services/multimedia/mediaplayer/control
+    (`msg::button` + `dat:json:{"key":"bn_vup_short","action":"forward"}`, reverse-engineered from
+    libbbmultimedia's MediaKeyWatcher): page turns without changing the system volume; released
+    when minimized (the registration is system-wide while the fd is open).
 - Packaging: `scripts/build-koreader.sh` assembles the tree, `scripts/package-bar.sh <buildId>`
-  makes `bar/KOReader-<ver>.<id>-armv7.bar` (launcher `platform/bb10/launcher.c`: KO_HOME in the
+  makes `bar/KOReader-<ver>.<id>-armv7.bar` (latest: 3) (launcher `platform/bb10/launcher.c`: KO_HOME in the
   sandbox's data/, log in logs/koreader.log). Install: `bb10-install <bar>` (phone unlocked).
 - Patch series: `patches/koreader-base/` (vs tag base 6e4bc81a) and `patches/koreader/` (vs v2026.07.2).
 

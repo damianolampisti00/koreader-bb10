@@ -1,0 +1,208 @@
+From de3479e6079e560a51156127fb9f16ebe85754f6 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 00:29:28 +0100
+Subject: [PATCH 6/6] bb10: grab the side keys while in the foreground
+
+Register volume +/- and play/pause on PPS mediaplayer/control like
+bb::multimedia::MediaKeyWatcher (dat:json:{key:bn_<key>_short,
+action:forward}): presses then come to us instead of changing the system
+volume. The PPS fd is watched with bps_add_fd (+ a wakeup event), and
+closed to give the keys back.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi-cdecl/bb10_cdecl.c | 10 ++++++++
+ ffi/bb10.lua           | 54 ++++++++++++++++++++++++++++++++++++++++++
+ ffi/bb10_h.lua         | 13 ++++++++++
+ ffi/input_bb10.lua     | 27 +++++++++++++++++++++
+ 4 files changed, 104 insertions(+)
+
+diff --git a/ffi-cdecl/bb10_cdecl.c b/ffi-cdecl/bb10_cdecl.c
+index 9b84df37..39acd634 100644
+--- a/ffi-cdecl/bb10_cdecl.c
++++ b/ffi-cdecl/bb10_cdecl.c
+@@ -88,12 +88,22 @@ cdecl_const(BPS_SUCCESS);
+ cdecl_const(BPS_FAILURE);
+ 
+ cdecl_type(bps_event_t);
++cdecl_struct(bps_event_payload_t);
++cdecl_type(bps_event_payload_t);
++cdecl_type(bps_event_completion_func);
+ 
+ cdecl_func(bps_initialize);
+ cdecl_func(bps_shutdown);
+ cdecl_func(bps_get_event);
+ cdecl_func(bps_event_get_domain);
+ cdecl_func(bps_event_get_code);
++cdecl_func(bps_event_create);
++cdecl_func(bps_push_event);
++cdecl_func(bps_register_domain);
++
++cdecl_const(BPS_IO_INPUT);
++cdecl_func(bps_add_fd);
++cdecl_func(bps_remove_fd);
+ 
+ cdecl_func(screen_request_events);
+ cdecl_func(screen_stop_events);
+diff --git a/ffi/bb10.lua b/ffi/bb10.lua
+index aae16be9..c8aaed2e 100644
+--- a/ffi/bb10.lua
++++ b/ffi/bb10.lua
+@@ -10,6 +10,7 @@ local bit = require("bit")
+ local ffi = require("ffi")
+ local C = ffi.C
+ 
++require("ffi/posix_h")
+ require("ffi/bb10_h")
+ 
+ local bb10 = {
+@@ -93,6 +94,58 @@ function bb10.init()
+     bb10.screen_domain = B.screen_get_domain()
+     bb10.navigator_domain = B.navigator_get_domain()
+     bb10.button_domain = B.button_get_domain()
++    -- Used to wake up bps_get_event when side keys come through PPS (see grabSideKeys).
++    bb10.wakeup_domain = B.bps_register_domain()
++end
++
++-- Side keys "watched" like bb::multimedia::MediaKeyWatcher does: while registered, their presses
++-- come to us (as `msg::key\ndat::bn_<key>_short`) instead of changing the system volume.
++-- NOTE: that's system-wide, so only grab them while we're in the foreground.
++local MEDIA_KEYS_PPS = "/pps/services/multimedia/mediaplayer/control"
++local SIDE_KEYS = { "vup", "vdown", "playpause" }
++
++--- Side key presses received through PPS (key names: "vup", "vdown", "playpause").
++bb10.side_keys = {}
++
++local side_keys_buf = ffi.new("char[1024]")
++local side_keys_handler = ffi.cast("int (*)(int, int, void *)", function(fd)
++    local n = C.read(fd, side_keys_buf, ffi.sizeof(side_keys_buf) - 1)
++    if n <= 0 then
++        return C.BPS_SUCCESS
++    end
++    local got = false
++    for key in ffi.string(side_keys_buf, n):gmatch("msg::key\ndat::bn_(%w+)_short") do
++        table.insert(bb10.side_keys, key)
++        got = true
++    end
++    if got then
++        local ev = ffi.new("bps_event_t *[1]")
++        if bb10.bps.bps_event_create(ev, bb10.wakeup_domain, 0, nil, nil) == C.BPS_SUCCESS then
++            bb10.bps.bps_push_event(ev[0])
++        end
++    end
++    return C.BPS_SUCCESS
++end)
++
++function bb10.grabSideKeys(grab)
++    if grab and not bb10.side_keys_fd then
++        local fd = C.open(MEDIA_KEYS_PPS, C.O_RDWR)
++        if fd < 0 then
++            return false
++        end
++        for _, key in ipairs(SIDE_KEYS) do
++            local msg = string.format('msg::button\nid::%s\ndat:json:{"key":"bn_%s_short","action":"forward"}\n', key, key)
++            C.write(fd, msg, #msg)
++        end
++        bb10.bps.bps_add_fd(fd, C.BPS_IO_INPUT, side_keys_handler, nil)
++        bb10.side_keys_fd = fd
++    elseif not grab and bb10.side_keys_fd then
++        -- Closing the PPS connection drops our registrations.
++        bb10.bps.bps_remove_fd(bb10.side_keys_fd)
++        C.close(bb10.side_keys_fd)
++        bb10.side_keys_fd = nil
++    end
++    return bb10.side_keys_fd ~= nil
+ end
+ 
+ function bb10.setKeepAwake(keep_awake)
+@@ -126,6 +179,7 @@ function bb10.shutdown()
+     if not bb10.ctx then
+         return
+     end
++    bb10.grabSideKeys(false)
+     bb10.bps.screen_stop_events(bb10.ctx)
+     bb10.bps.navigator_stop_events(0)
+     bb10.bps.button_stop_events(0)
+diff --git a/ffi/bb10_h.lua b/ffi/bb10_h.lua
+index ae9e844b..73f0bd2a 100644
+--- a/ffi/bb10_h.lua
++++ b/ffi/bb10_h.lua
+@@ -65,11 +65,24 @@ int screen_get_event_property_iv(screen_event_t, int, int *);
+ static const unsigned BPS_SUCCESS = 0;
+ static const int BPS_FAILURE = -1;
+ typedef struct bps_event_t bps_event_t;
++struct bps_event_payload_t {
++  uintptr_t data1;
++  uintptr_t data2;
++  uintptr_t data3;
++};
++typedef struct bps_event_payload_t bps_event_payload_t;
++typedef void (*bps_event_completion_func)(bps_event_t *);
+ int bps_initialize(void);
+ void bps_shutdown(void);
+ int bps_get_event(bps_event_t **, int);
+ int bps_event_get_domain(bps_event_t *);
+ unsigned bps_event_get_code(bps_event_t *);
++int bps_event_create(bps_event_t **, unsigned, unsigned, const bps_event_payload_t *, bps_event_completion_func);
++int bps_push_event(bps_event_t *);
++int bps_register_domain(void);
++static const unsigned BPS_IO_INPUT = 1;
++int bps_add_fd(int, int, int (*)(int, int, void *), void *);
++int bps_remove_fd(int);
+ int screen_request_events(screen_context_t);
+ int screen_stop_events(screen_context_t);
+ int screen_get_domain();
+diff --git a/ffi/input_bb10.lua b/ffi/input_bb10.lua
+index 52f4ef24..8e975154 100644
+--- a/ffi/input_bb10.lua
++++ b/ffi/input_bb10.lua
+@@ -137,7 +137,29 @@ local button_keycodes = {
+     [C.BUTTON_PLAYPAUSE] = C.KEYCODE_PLAY,
+ }
+ 
++local side_keycodes = {
++    vup = C.KEYCODE_VOLUME_UP,
++    vdown = C.KEYCODE_VOLUME_DOWN,
++    playpause = C.KEYCODE_PLAY,
++}
++
++local function sideKeyEvents()
++    for _, key in ipairs(bb10.side_keys) do
++        local code = side_keycodes[key]
++        if code then
++            -- PPS only reports clicks.
++            genEmuEvent(C.EV_KEY, code, 1)
++            genEmuEvent(C.EV_KEY, code, 0)
++        end
++    end
++    bb10.side_keys = {}
++end
++
+ local function buttonEvent(event)
++    if bb10.side_keys_fd then
++        -- Grabbed: they come through PPS (see sideKeyEvents).
++        return
++    end
+     local code = button_keycodes[tonumber(bb10.bps.button_event_get_button(event))]
+     if code then
+         genEmuEvent(C.EV_KEY, code, bb10.bps.bps_event_get_code(event) == C.BUTTON_DOWN and 1 or 0)
+@@ -174,6 +196,8 @@ function input.waitForEvent(sec, usec)
+         handleEvent()
+     end
+ 
++    sideKeyEvents()
++
+     if #inputQueue > 0 then
+         return true, inputQueue
+     else
+@@ -181,4 +205,7 @@ function input.waitForEvent(sec, usec)
+     end
+ end
+ 
++-- bps_get_event may call back into Lua (side keys handler): never from JIT-compiled code.
++jit.off(input.waitForEvent)
++
+ return input
+-- 
+2.56.0
+
