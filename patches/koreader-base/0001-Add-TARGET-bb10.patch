@@ -1,0 +1,644 @@
+From 7eadb6f8c283aace11e8e6590d598c3c0c360938 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 20:43:04 +0100
+Subject: [PATCH] Add TARGET=bb10 (BlackBerry 10 / QNX 8, GCC 9.3)
+
+- Makefile.defs: bb10 target (arm-blackberry-qnx8eabi, Cortex-A9 softfp),
+  CMAKE_SYSTEM_NAME QNX, meson system qnx, compat headers, _NO_CPP_INLINES.
+- Exclude czmq/libzmq, sdcv/glib, tar; ship libgcc_s.so.1 with libstdc++.
+- QNX fixes: luajit (TARGET_SYS=QNX), libressl (getentropy/arc4random),
+  djvulibre (getc macro), k2pdfopt (stricmp, min/max, off64_t), mupdf
+  (stdint), luasocket (UNIX), nnsvg (strndup shim).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Makefile.defs                                 | 21 ++++-
+ cmake/CMakeLists.txt                          | 29 ++++--
+ .../cmake_modules/koreader_targets.cmake      | 11 ++-
+ thirdparty/djvulibre/CMakeLists.txt           |  4 +
+ thirdparty/djvulibre/bb10-getc-macro.patch    | 11 +++
+ thirdparty/libk2pdfopt/CMakeLists.txt         |  6 ++
+ thirdparty/libk2pdfopt/bb10.patch             | 36 ++++++++
+ thirdparty/libressl/CMakeLists.txt            |  4 +
+ thirdparty/libressl/bb10.patch                | 90 +++++++++++++++++++
+ thirdparty/luajit/CMakeLists.txt              |  6 ++
+ .../luajit/koreader-luajit-qnx-host-os.patch  | 21 +++++
+ thirdparty/luasocket/overlay/CMakeLists.txt   |  3 +-
+ thirdparty/mupdf/CMakeLists.txt               |  4 +
+ toolchain/bb10/compat/strndup.c               | 15 ++++
+ toolchain/bb10/include/byteswap.h             |  9 ++
+ toolchain/bb10/include/endian.h               | 41 +++++++++
+ toolchain/bb10/include/syslog.h               | 48 ++++++++++
+ 17 files changed, 348 insertions(+), 11 deletions(-)
+ create mode 100644 thirdparty/djvulibre/bb10-getc-macro.patch
+ create mode 100644 thirdparty/libk2pdfopt/bb10.patch
+ create mode 100644 thirdparty/libressl/bb10.patch
+ create mode 100644 thirdparty/luajit/koreader-luajit-qnx-host-os.patch
+ create mode 100644 toolchain/bb10/compat/strndup.c
+ create mode 100644 toolchain/bb10/include/byteswap.h
+ create mode 100644 toolchain/bb10/include/endian.h
+ create mode 100644 toolchain/bb10/include/syslog.h
+
+diff --git a/Makefile.defs b/Makefile.defs
+index 6240b3be..53121cd8 100644
+--- a/Makefile.defs
++++ b/Makefile.defs
+@@ -247,6 +247,10 @@ else ifeq ($(TARGET), cervantes)
+ 		CHOST?=arm-linux-gnueabi
+ 	endif
+ 	USE_LJ_WPACLIENT=1
++else ifeq ($(TARGET), bb10)
++	# BlackBerry 10 (QNX 8.0), with BerryCore's GCC 9.3 toolchain.
++	BB10=1
++	CHOST?=arm-blackberry-qnx8eabi
+ else ifndef TARGET
+ 	# if TARGET is not defined we will build an emulator on current machine
+ 	EMULATE_READER=1
+@@ -579,6 +583,18 @@ else ifeq ($(TARGET), cervantes)
+ 		COMPAT_CFLAGS:=$(UBUNTU_COMPAT_CFLAGS)
+ 		COMPAT_CXXFLAGS:=$(UBUNTU_COMPAT_CFLAGS)
+ 	endif
++else ifeq ($(TARGET), bb10)
++	# Krait (Snapdragon S4 Plus), the BB10 ABI is softfp.
++	TARGET_CFLAGS:=$(ARMV7_A9_ARCH)
++	TARGET_CFLAGS+=-mfloat-abi=softfp
++	# NOTE: the toolchain's specs put `-isystem $QNX_INC` first, so QNX_INC must point
++	# to NDK headers stripped of the third-party libraries we build (zlib, png, freetype…).
++	# Add a few headers the NDK lacks (endian.h, byteswap.h, syslog.h).
++	BB10_TC_DIR:=$(abspath $(KOR_BASE)/toolchain/bb10)
++	COMPAT_CFLAGS:=-idirafter $(BB10_TC_DIR)/include
++	# The NDK's (Dinkum) <math.h> adds C++ overloads (e.g. `pow(float, int)`)
++	# that clash with libstdc++'s <cmath>: disable them.
++	COMPAT_CXXFLAGS:=$(COMPAT_CFLAGS) -D_NO_CPP_INLINES
+ else ifeq ($(TARGET), arm-generic)
+ 	# Defaults to generic crap
+ 	TARGET_CFLAGS:=$(ARMV6_GENERIC_ARCH)
+@@ -902,7 +918,7 @@ $(cmake_toolchain)
+ # NOTE: use Linux for Android too (cf. https://github.com/taka-no-me/android-cmake and
+ # https://android.googlesource.com/platform/ndk/+/master/build/cmake/android.toolchain.cmake)
+ # In the meantime, I'll be sitting in the corner, crying hysterically.
+-set(CMAKE_SYSTEM_NAME $(if $(DARWIN),Darwin,$(if $(WIN32),Windows,Linux)))
++set(CMAKE_SYSTEM_NAME $(if $(DARWIN),Darwin,$(if $(WIN32),Windows,$(if $(BB10),QNX,Linux))))
+ 
+ # Magical value that inhibits all of CMake's own NDK handling code. (Or shit goes boom.)
+ $(if $(ANDROID),set(CMAKE_SYSTEM_VERSION 1))
+@@ -983,6 +999,7 @@ set(GLIBC_VERSION_MAX  $(GLIBC_VERSION_MAX))
+ 
+ # Platform flags.
+ set(ANDROID        $(ANDROID))
++set(BB10           $(BB10))
+ set(CERVANTES      $(CERVANTES))
+ set(KINDLE         $(KINDLE))
+ set(KOBO           $(KOBO))
+@@ -1044,7 +1061,7 @@ else
+ MESON_CROSS_TOOLCHAIN = $(CMAKE_DIR)/meson_cross_toolchain.ini
+ MESON_HOST_TOOLCHAIN = $(CMAKE_DIR)/meson_host_toolchain.ini
+ 
+-MESON_CROSS_SYSTEM = $(if $(ANDROID),android,linux)
++MESON_CROSS_SYSTEM = $(if $(ANDROID),android,$(if $(BB10),qnx,linux))
+ ifneq (,$(filter aarch64-%,$(TARGET_MACHINE)))
+   MESON_CROSS_CPU_FAMILY = aarch64
+ else ifneq (,$(filter arm-% armv7a-%,$(TARGET_MACHINE)))
+diff --git a/cmake/CMakeLists.txt b/cmake/CMakeLists.txt
+index 0021005f..d820ce3f 100644
+--- a/cmake/CMakeLists.txt
++++ b/cmake/CMakeLists.txt
+@@ -188,6 +188,20 @@ if(NOT ((ANDROID AND MONOLIBTIC) OR APPLE OR EMULATE_READER OR USE_SDL))
+         VERBATIM
+     )
+     add_custom_target(stl-install ALL DEPENDS ${OUTPUT_DIR}/libs/${STL_NAME})
++    if(BB10)
++        # Our toolchain's libgcc_s is needed too (the system one is older).
++        find_compiler_lib_path(GCC_S_PATH libgcc_s.so.1 REQUIRED)
++        set(CMD_LIST)
++        append_binary_install_command(CMD_LIST ${GCC_S_PATH} DESTINATION ${OUTPUT_DIR}/libs)
++        add_custom_command(
++            OUTPUT ${OUTPUT_DIR}/libs/libgcc_s.so.1
++            COMMAND ${CMD_LIST}
++            COMMENT "Installing 'libgcc_s.so.1'"
++            DEPENDS ${GCC_S_PATH}
++            VERBATIM
++        )
++        add_custom_target(gcc_s-install ALL DEPENDS ${OUTPUT_DIR}/libs/libgcc_s.so.1)
++    endif()
+ endif()
+ 
+ # THIRDPARTY. {{{
+@@ -242,7 +256,7 @@ declare_project(thirdparty/cpu_features EXCLUDE_FROM_ALL)
+ declare_project(thirdparty/curl DEPENDS libressl zlib EXCLUDE_FROM_ALL)
+ 
+ # czmq
+-if(NOT WIN32)
++if(NOT (WIN32 OR BB10))
+     set(EXCLUDE_FROM_ALL)
+ else()
+     set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+@@ -354,7 +368,7 @@ declare_project(thirdparty/libunibreak EXCLUDE_FROM_ALL)
+ declare_project(thirdparty/libwebp)
+ 
+ # libzmq
+-if(NOT WIN32)
++if(NOT (WIN32 OR BB10))
+     set(EXCLUDE_FROM_ALL)
+ else()
+     set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+@@ -443,7 +457,12 @@ declare_project(thirdparty/popen-noshell EXCLUDE_FROM_ALL)
+ declare_project(thirdparty/proxy-libintl EXCLUDE_FROM_ALL)
+ 
+ # sdcv
+-declare_project(thirdparty/sdcv DEPENDS glib zlib)
++if(BB10)
++    set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
++else()
++    set(EXCLUDE_FROM_ALL)
++endif()
++declare_project(thirdparty/sdcv DEPENDS glib zlib ${EXCLUDE_FROM_ALL})
+ 
+ # sdl3
+ if(USE_SDL STREQUAL "builtin")
+@@ -484,7 +503,7 @@ declare_project(thirdparty/sdl3 ${EXCLUDE_FROM_ALL})
+ declare_project(thirdparty/sqlite)
+ 
+ # tar
+-if(NOT (ANDROID OR APPLE OR EMULATE_READER OR WIN32))
++if(NOT (ANDROID OR APPLE OR BB10 OR EMULATE_READER OR WIN32))
+     set(EXCLUDE_FROM_ALL)
+ else()
+     set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+@@ -655,7 +674,7 @@ endif()
+ ffi_target(cervantes mxcfb_cervantes_h.lua mxcfb_cervantes_decl.c ${EXCLUDE_FROM_ALL})
+ 
+ # czmq
+-if(APPLE)
++if(APPLE OR BB10)
+     # Generating FFI cdecls for czmq currently fails on macOS…
+     set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+ else()
+diff --git a/thirdparty/cmake_modules/koreader_targets.cmake b/thirdparty/cmake_modules/koreader_targets.cmake
+index 4e405fc8..ca8bb426 100644
+--- a/thirdparty/cmake_modules/koreader_targets.cmake
++++ b/thirdparty/cmake_modules/koreader_targets.cmake
+@@ -76,7 +76,7 @@ endfunction()
+ # KOREADER LIBRARIES. {{{
+ 
+ # blitbuffer
+-if(ANDROID OR CERVANTES OR KINDLE OR KOBO OR POCKETBOOK OR REMARKABLE OR SONY_PRSTUX OR USE_SDL)
++if(ANDROID OR BB10 OR CERVANTES OR KINDLE OR KOBO OR POCKETBOOK OR REMARKABLE OR SONY_PRSTUX OR USE_SDL)
+     set(EXCLUDE_FROM_ALL)
+ else()
+     set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+@@ -114,7 +114,7 @@ set(DEPENDS luajit::luajit)
+ if(KINDLE OR REMARKABLE)
+     list(APPEND DEPENDS popen-noshell::popen-noshell)
+ endif()
+-if(ANDROID OR POCKETBOOK OR USE_SDL)
++if(ANDROID OR BB10 OR POCKETBOOK OR USE_SDL)
+     set(EXCLUDE_FROM_ALL EXCLUDE_FROM_ALL)
+ else()
+     set(EXCLUDE_FROM_ALL)
+@@ -138,10 +138,15 @@ function(setup_koreader_input)
+ endfunction()
+ 
+ # koreader-nnsvg
++set(SOURCES nnsvg.c)
++if(BB10)
++    # QNX's libc lacks `strndup`.
++    list(APPEND SOURCES toolchain/bb10/compat/strndup.c)
++endif()
+ declare_koreader_target(
+     koreader-nnsvg TYPE monolibtic
+     DEPENDS luajit::luajit nanosvg::nanosvg
+-    SOURCES nnsvg.c
++    SOURCES ${SOURCES}
+     SUFFIX .so
+     VISIBILITY hidden
+ )
+diff --git a/thirdparty/djvulibre/CMakeLists.txt b/thirdparty/djvulibre/CMakeLists.txt
+index e7a0f5eb..4dd73a13 100644
+--- a/thirdparty/djvulibre/CMakeLists.txt
++++ b/thirdparty/djvulibre/CMakeLists.txt
+@@ -8,6 +8,10 @@ list(APPEND PATCH_FILES no_references_to_install_dir.patch)
+ if(ANDROID)
+     list(APPEND PATCH_FILES android.patch)
+ endif()
++if(BB10)
++    # QNX's <stdio.h> defines `getc` as a macro, even in C++.
++    list(APPEND PATCH_FILES bb10-getc-macro.patch)
++endif()
+ 
+ list(APPEND CMAKE_ARGS
+     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+diff --git a/thirdparty/djvulibre/bb10-getc-macro.patch b/thirdparty/djvulibre/bb10-getc-macro.patch
+new file mode 100644
+index 00000000..c56d83fb
+--- /dev/null
++++ b/thirdparty/djvulibre/bb10-getc-macro.patch
+@@ -0,0 +1,11 @@
++--- a/libdjvu/miniexp.cpp	2026-10-28 19:31:32.941589926 +0100
+++++ b/libdjvu/miniexp.cpp	2026-10-28 19:31:32.942589929 +0100
++@@ -1326,7 +1326,7 @@
++ 
++ static int true_stdio_fgetc(miniexp_io_t *io) {
++   FILE *f = (io->data[0]) ? (FILE*)(io->data[0]) : stdin;
++-  return ::getc(f);
+++  return (::getc)(f);
++ }
++ static int compat_getc() { 
++   return true_stdio_fgetc(&miniexp_io); 
+diff --git a/thirdparty/libk2pdfopt/CMakeLists.txt b/thirdparty/libk2pdfopt/CMakeLists.txt
+index faae6a82..1ce9a777 100644
+--- a/thirdparty/libk2pdfopt/CMakeLists.txt
++++ b/thirdparty/libk2pdfopt/CMakeLists.txt
+@@ -4,6 +4,11 @@ if(NOT MONOLIBTIC)
+     list(APPEND PATCH_CMD COMMAND ${ISED} "\$p" -e "\$s|.*|include(${CMAKE_PATCH_FILE})|" lib/CMakeLists.txt)
+ endif()
+ 
++if(BB10)
++    # QNX: stricmp & co are provided, min/max are macros.
++    list(APPEND PATCH_FILES bb10.patch)
++endif()
++
+ list(APPEND CMAKE_ARGS
+     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+     -DBUILD_SHARED_LIBS=$<NOT:$<BOOL:${MONOLIBTIC}>>
+@@ -22,6 +27,7 @@ endif()
+ external_project(
+     DOWNLOAD GIT 1fcffeb1e61ec43265d23e2ac77d9a901f8c45d2
+     https://github.com/koreader/libk2pdfopt.git
++    PATCH_FILES ${PATCH_FILES}
+     PATCH_COMMAND ${PATCH_CMD}
+     CMAKE_ARGS ${CMAKE_ARGS}
+     SOURCE_SUBDIR lib
+diff --git a/thirdparty/libk2pdfopt/bb10.patch b/thirdparty/libk2pdfopt/bb10.patch
+new file mode 100644
+index 00000000..a7b25a32
+--- /dev/null
++++ b/thirdparty/libk2pdfopt/bb10.patch
+@@ -0,0 +1,36 @@
++diff -ruN a/lib/koptcrop.c b/lib/koptcrop.c
++--- a/lib/koptcrop.c	2026-10-28 20:27:40.326764994 +0100
+++++ b/lib/koptcrop.c	2026-10-28 20:27:50.064037594 +0100
++@@ -29,6 +29,10 @@
++ #include "setting.h"
++ #include "koptcrop.h"
++ 
+++/* QNX's <stdlib.h> defines min/max macros. */
+++#undef min
+++#undef max
+++
++ float min(float a, float b) {
++     return (a < b) ? a : b;
++ }
++diff -ruN a/willuslib/willus.h b/willuslib/willus.h
++--- a/willuslib/willus.h	2026-10-28 20:27:40.326764994 +0100
+++++ b/willuslib/willus.h	2026-10-28 20:40:33.927941172 +0100
++@@ -160,7 +160,7 @@
++ #endif
++ 
++ #undef NEEDSTRICMP
++-#if (!defined(MSDOS) && !defined(DJEMX) && !defined(_MSC_VER) && !defined(CYGWIN32) && !defined(__DMC__) && !defined(__LCC__) && !defined(__WATCOMC__) && !defined(__BORLANDC__) && !defined(__MINGW32__) && !defined(__TINYC__))
+++#if (!defined(MSDOS) && !defined(DJEMX) && !defined(_MSC_VER) && !defined(CYGWIN32) && !defined(__DMC__) && !defined(__LCC__) && !defined(__WATCOMC__) && !defined(__BORLANDC__) && !defined(__MINGW32__) && !defined(__TINYC__) && !defined(__QNX__))
++ #define NEEDSTRICMP
++ #endif
++ 
++@@ -1001,6 +1001,9 @@
++     FILIST *toplist;
++     } RFIND;
++ 
+++#ifdef __QNX__
+++#define _off64_t off64_t
+++#endif
++ #ifdef WILLUS_HAVE_FILE64
++ #define wfile_tell(f) ((long long)(ftello64(f)))
++ #define wfile_seek(f,pos,offtype) fseeko64(f,(_off64_t)(pos),offtype)
+diff --git a/thirdparty/libressl/CMakeLists.txt b/thirdparty/libressl/CMakeLists.txt
+index f9773ffb..6a88d855 100644
+--- a/thirdparty/libressl/CMakeLists.txt
++++ b/thirdparty/libressl/CMakeLists.txt
+@@ -2,6 +2,10 @@ list(APPEND PATCH_FILES cmake_tweaks.patch)
+ if(ANDROID)
+     list(APPEND PATCH_FILES android.patch)
+ endif()
++if(BB10)
++    # arc4random/getentropy hooks for QNX, no AI_ADDRCONFIG.
++    list(APPEND PATCH_FILES bb10.patch)
++endif()
+ 
+ list(APPEND CMAKE_ARGS
+     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+diff --git a/thirdparty/libressl/bb10.patch b/thirdparty/libressl/bb10.patch
+new file mode 100644
+index 00000000..3aaada80
+--- /dev/null
++++ b/thirdparty/libressl/bb10.patch
+@@ -0,0 +1,90 @@
++diff --color -ruN a/crypto/CMakeLists.txt b/crypto/CMakeLists.txt
++--- a/crypto/CMakeLists.txt	2026-10-28 19:32:00.950663548 +0100
+++++ b/crypto/CMakeLists.txt	2026-10-28 19:32:14.064194418 +0100
++@@ -735,6 +735,8 @@
++ 			set(COMPAT_SRC ${COMPAT_SRC} compat/getentropy_osx.c)
++ 		elseif(CMAKE_SYSTEM_NAME MATCHES "SunOS")
++ 			set(COMPAT_SRC ${COMPAT_SRC} compat/getentropy_solaris.c)
+++		elseif(CMAKE_SYSTEM_NAME MATCHES "QNX")
+++			set(COMPAT_SRC ${COMPAT_SRC} compat/getentropy_qnx.c)
++ 		endif()
++ 	endif()
++ endif()
++diff --color -ruN a/crypto/compat/arc4random.h b/crypto/compat/arc4random.h
++--- a/crypto/compat/arc4random.h	2026-10-28 19:32:00.946663537 +0100
+++++ b/crypto/compat/arc4random.h	2026-10-28 19:32:14.063673087 +0100
++@@ -21,6 +21,9 @@
++ #elif defined(__NetBSD__)
++ #include "arc4random_netbsd.h"
++ 
+++#elif defined(__QNX__)
+++#include "arc4random_linux.h"
+++
++ #elif defined(__APPLE__)
++ #include "arc4random_osx.h"
++ 
++diff --color -ruN a/crypto/compat/getentropy_qnx.c b/crypto/compat/getentropy_qnx.c
++--- a/crypto/compat/getentropy_qnx.c	1970-01-01 01:00:00.000000000 +0100
+++++ b/crypto/compat/getentropy_qnx.c	2026-10-28 19:32:14.067697927 +0100
++@@ -0,0 +1,46 @@
+++/*
+++ * getentropy() for QNX (BlackBerry 10), which has no getentropy/getrandom:
+++ * read the kernel's random device.
+++ */
+++#include <errno.h>
+++#include <fcntl.h>
+++#include <stddef.h>
+++#include <unistd.h>
+++
+++int getentropy(void *buf, size_t len);
+++
+++int
+++getentropy(void *buf, size_t len)
+++{
+++	unsigned char *p = buf;
+++	size_t done = 0;
+++	int fd;
+++
+++	if (len > 256) {
+++		errno = EIO;
+++		return (-1);
+++	}
+++	fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+++	if (fd == -1)
+++		fd = open("/dev/random", O_RDONLY | O_CLOEXEC);
+++	if (fd == -1)
+++		return (-1);
+++	while (done < len) {
+++		ssize_t n = read(fd, p + done, len - done);
+++		if (n == -1) {
+++			if (errno == EINTR)
+++				continue;
+++			close(fd);
+++			errno = EIO;
+++			return (-1);
+++		}
+++		if (n == 0) {
+++			close(fd);
+++			errno = EIO;
+++			return (-1);
+++		}
+++		done += (size_t)n;
+++	}
+++	close(fd);
+++	return (0);
+++}
++diff --color -ruN a/tls/tls_client.c b/tls/tls_client.c
++--- a/tls/tls_client.c	2026-10-28 19:32:00.953663555 +0100
+++++ b/tls/tls_client.c	2026-10-28 19:32:14.064782932 +0100
++@@ -113,7 +113,11 @@
++ 		if (getaddrinfo(h, p, &hints, &res0) != 0) {
++ 			/* last try, with name resolution and save the error */
++ 			hints.ai_family = AF_UNSPEC;
+++#ifdef AI_ADDRCONFIG
++ 			hints.ai_flags = AI_ADDRCONFIG;
+++#else
+++			hints.ai_flags = 0;
+++#endif
++ 			if ((s = getaddrinfo(h, p, &hints, &res0)) != 0) {
++ 				tls_set_errorx(ctx, TLS_ERROR_UNKNOWN,
++ 				    "%s", gai_strerror(s));
+diff --git a/thirdparty/luajit/CMakeLists.txt b/thirdparty/luajit/CMakeLists.txt
+index e6d8348e..8f3b3805 100644
+--- a/thirdparty/luajit/CMakeLists.txt
++++ b/thirdparty/luajit/CMakeLists.txt
+@@ -4,6 +4,10 @@ set(BINARY_DIR ${SOURCE_DIR})
+ list(APPEND PATCH_FILES koreader-luajit-makefile-tweaks.patch)
+ # Enable table.pack & table.unpack w/o the rest of the -DLUAJIT_ENABLE_LUA52COMPAT baggage...
+ list(APPEND PATCH_FILES koreader-luajit-enable-table_pack.patch)
++if(BB10)
++    # Build buildvm for a QNX (POSIX) target.
++    list(APPEND PATCH_FILES koreader-luajit-qnx-host-os.patch)
++endif()
+ 
+ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+     # Debugging is a go!
+@@ -65,6 +69,8 @@ else()
+         list(APPEND BUILD_ARGS TARGET_SYS=Linux)
+     elseif(WIN32)
+         list(APPEND BUILD_ARGS TARGET_SYS=Windows)
++    elseif(BB10)
++        list(APPEND BUILD_ARGS TARGET_SYS=QNX)
+     endif()
+     list(APPEND BUILD_ARGS TARGET_STRIP=true)
+ endif()
+diff --git a/thirdparty/luajit/koreader-luajit-qnx-host-os.patch b/thirdparty/luajit/koreader-luajit-qnx-host-os.patch
+new file mode 100644
+index 00000000..9fe7767e
+--- /dev/null
++++ b/thirdparty/luajit/koreader-luajit-qnx-host-os.patch
+@@ -0,0 +1,21 @@
++diff --git a/src/Makefile b/src/Makefile
++index 0e45976a..3bb749d2 100644
++--- a/src/Makefile
+++++ b/src/Makefile
++@@ -375,12 +375,16 @@ ifneq ($(HOST_SYS),$(TARGET_SYS))
++   else
++   ifeq (iOS,$(TARGET_SYS))
++     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OSX -DLUAJIT_TARGET_IPHONE=1
+++  else
+++  ifeq (QNX,$(TARGET_SYS))
+++    HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_POSIX -DLJ_TARGET_QNX=1
++   else
++     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OTHER
++   endif
++   endif
++   endif
++   endif
+++  endif
++ endif
++ 
++ ifneq (,$(CCDEBUG))
+diff --git a/thirdparty/luasocket/overlay/CMakeLists.txt b/thirdparty/luasocket/overlay/CMakeLists.txt
+index fdd5eb7e..c3208d6f 100644
+--- a/thirdparty/luasocket/overlay/CMakeLists.txt
++++ b/thirdparty/luasocket/overlay/CMakeLists.txt
+@@ -21,7 +21,8 @@ target_sources(luasocket PRIVATE
+ )
+ if(APPLE)
+     target_sources(luasocket PRIVATE src/usocket.c)
+-elseif(LINUX)
++elseif(UNIX)
++    # Linux, QNX (BB10)…
+     target_sources(luasocket PRIVATE src/usocket.c)
+ elseif(WIN32)
+     # TODO
+diff --git a/thirdparty/mupdf/CMakeLists.txt b/thirdparty/mupdf/CMakeLists.txt
+index b44e2950..41f51055 100644
+--- a/thirdparty/mupdf/CMakeLists.txt
++++ b/thirdparty/mupdf/CMakeLists.txt
+@@ -70,6 +70,10 @@ if(ANDROID AND CHOST MATCHES "^armv7a-.*")
+     # (https://android.googlesource.com/platform/bionic/+/master/docs/32-bit-abi.md)
+     string(APPEND XCFLAGS " -D_FILE_OFFSET_BITS=32")
+ endif()
++if(BB10)
++    # QNX has no BSD `u_int*_t` types (used by `fitz/icc34.h`).
++    string(APPEND XCFLAGS " -DHAVE_STDINT_H")
++endif()
+ 
+ set(MAKE_CMD
+     make -C ${SOURCE_DIR}
+diff --git a/toolchain/bb10/compat/strndup.c b/toolchain/bb10/compat/strndup.c
+new file mode 100644
+index 00000000..58019bdb
+--- /dev/null
++++ b/toolchain/bb10/compat/strndup.c
+@@ -0,0 +1,15 @@
++/* strndup() for BB10 (QNX 8), whose libc lacks it. */
++#include <stdlib.h>
++#include <string.h>
++
++__attribute__((visibility("hidden")))
++char *strndup(const char *s, size_t n)
++{
++    size_t len = strnlen(s, n);
++    char *d = malloc(len + 1);
++    if (d) {
++        memcpy(d, s, len);
++        d[len] = '\0';
++    }
++    return d;
++}
+diff --git a/toolchain/bb10/include/byteswap.h b/toolchain/bb10/include/byteswap.h
+new file mode 100644
+index 00000000..69b8f2a7
+--- /dev/null
++++ b/toolchain/bb10/include/byteswap.h
+@@ -0,0 +1,9 @@
++/* <byteswap.h> for BB10 (QNX 8). */
++#ifndef KO_BB10_BYTESWAP_H
++#define KO_BB10_BYTESWAP_H
++
++#define bswap_16(x) __builtin_bswap16(x)
++#define bswap_32(x) __builtin_bswap32(x)
++#define bswap_64(x) __builtin_bswap64(x)
++
++#endif
+diff --git a/toolchain/bb10/include/endian.h b/toolchain/bb10/include/endian.h
+new file mode 100644
+index 00000000..3d9e0168
+--- /dev/null
++++ b/toolchain/bb10/include/endian.h
+@@ -0,0 +1,41 @@
++/* <endian.h> for BB10 (QNX 8): glibc/BSD-style byte order macros on top of <gulliver.h>. */
++#ifndef KO_BB10_ENDIAN_H
++#define KO_BB10_ENDIAN_H
++
++#include <gulliver.h>
++#include <stdint.h>
++
++#ifndef LITTLE_ENDIAN
++#define LITTLE_ENDIAN 1234
++#endif
++#ifndef BIG_ENDIAN
++#define BIG_ENDIAN 4321
++#endif
++#ifndef PDP_ENDIAN
++#define PDP_ENDIAN 3412
++#endif
++#ifndef BYTE_ORDER
++#if defined(__LITTLEENDIAN__)
++#define BYTE_ORDER LITTLE_ENDIAN
++#else
++#define BYTE_ORDER BIG_ENDIAN
++#endif
++#endif
++#define __LITTLE_ENDIAN LITTLE_ENDIAN
++#define __BIG_ENDIAN BIG_ENDIAN
++#define __BYTE_ORDER BYTE_ORDER
++
++#define htobe16(x) ENDIAN_BE16(x)
++#define htole16(x) ENDIAN_LE16(x)
++#define be16toh(x) ENDIAN_BE16(x)
++#define le16toh(x) ENDIAN_LE16(x)
++#define htobe32(x) ENDIAN_BE32(x)
++#define htole32(x) ENDIAN_LE32(x)
++#define be32toh(x) ENDIAN_BE32(x)
++#define le32toh(x) ENDIAN_LE32(x)
++#define htobe64(x) ENDIAN_BE64(x)
++#define htole64(x) ENDIAN_LE64(x)
++#define be64toh(x) ENDIAN_BE64(x)
++#define le64toh(x) ENDIAN_LE64(x)
++
++#endif
+diff --git a/toolchain/bb10/include/syslog.h b/toolchain/bb10/include/syslog.h
+new file mode 100644
+index 00000000..b3ea28b9
+--- /dev/null
++++ b/toolchain/bb10/include/syslog.h
+@@ -0,0 +1,48 @@
++/* <syslog.h> for BB10 (QNX 8): libc.so.3 exports the functions but the NDK ships no header. */
++#ifndef KO_BB10_SYSLOG_H
++#define KO_BB10_SYSLOG_H
++
++#include <stdarg.h>
++
++#define LOG_EMERG   0
++#define LOG_ALERT   1
++#define LOG_CRIT    2
++#define LOG_ERR     3
++#define LOG_WARNING 4
++#define LOG_NOTICE  5
++#define LOG_INFO    6
++#define LOG_DEBUG   7
++
++#define LOG_KERN   (0 << 3)
++#define LOG_USER   (1 << 3)
++#define LOG_DAEMON (3 << 3)
++#define LOG_AUTH   (4 << 3)
++#define LOG_LOCAL0 (16 << 3)
++#define LOG_LOCAL1 (17 << 3)
++#define LOG_LOCAL2 (18 << 3)
++#define LOG_LOCAL3 (19 << 3)
++#define LOG_LOCAL4 (20 << 3)
++#define LOG_LOCAL5 (21 << 3)
++#define LOG_LOCAL6 (22 << 3)
++#define LOG_LOCAL7 (23 << 3)
++
++#define LOG_PID    0x01
++#define LOG_CONS   0x02
++#define LOG_NDELAY 0x08
++
++#define LOG_MASK(pri) (1 << (pri))
++#define LOG_UPTO(pri) ((1 << ((pri) + 1)) - 1)
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++void openlog(const char *ident, int option, int facility);
++void syslog(int priority, const char *format, ...);
++void vsyslog(int priority, const char *format, va_list ap);
++void closelog(void);
++int setlogmask(int mask);
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+-- 
+2.56.0
+

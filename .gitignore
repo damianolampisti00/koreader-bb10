@@ -5,3 +5,6 @@
 /luajit/
 /out/
 /tests/cxx17/smoke
+/sysinc/
+/ccache/
+/logs/
