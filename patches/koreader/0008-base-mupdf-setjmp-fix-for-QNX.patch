@@ -1,7 +1,7 @@
 From 8e71ec4ac9cfac5eaa001f64cb4600fdae3d37bd Mon Sep 17 00:00:00 2001
 From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 00:53:32 +0100
-Subject: [PATCH 8/8] base: mupdf setjmp fix for QNX
+Subject: [PATCH 8/9] base: mupdf setjmp fix for QNX
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

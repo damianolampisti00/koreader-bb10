@@ -1,0 +1,32 @@
+From 4a695da41c11f3f81110a88fa3d713756c10efa8 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 01:00:37 +0100
+Subject: [PATCH 9/9] bb10: Alt isn't a modifier on the Q10, map its sym key
+
+Alt+key already arrives as the resulting symbol: also sending Alt as a
+modifier made InputText drop it (passwords with symbols couldn't be typed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ frontend/device/bb10/event_map.lua | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/frontend/device/bb10/event_map.lua b/frontend/device/bb10/event_map.lua
+index 23ef6c74e..5c8f4508e 100644
+--- a/frontend/device/bb10/event_map.lua
++++ b/frontend/device/bb10/event_map.lua
+@@ -48,8 +48,9 @@ return {
+     [0xF0FF] = "Del", -- KEYCODE_DELETE
+     [0xF0E1] = "Shift", -- KEYCODE_LEFT_SHIFT
+     [0xF0E2] = "Shift", -- KEYCODE_RIGHT_SHIFT
+-    [0xF0E9] = "Alt", -- KEYCODE_LEFT_ALT
+-    [0xF0EA] = "Alt", -- KEYCODE_RIGHT_ALT
++    -- NOTE: no Alt: on the Q10 it only selects the symbols layer, and input_bb10 already
++    --       sends the resulting symbol (an Alt modifier would stop InputText from typing it).
++    [0xF0D3] = "Sym", -- the Q10's "$"/sym key (not in sys/keycodes.h)
+     [0xF052] = "Up", -- KEYCODE_UP
+     [0xF054] = "Down", -- KEYCODE_DOWN
+     [0xF051] = "Left", -- KEYCODE_LEFT
+-- 
+2.56.0
+
