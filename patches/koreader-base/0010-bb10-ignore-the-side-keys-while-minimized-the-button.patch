@@ -1,0 +1,68 @@
+From df4704b6a94f209bc7d925dc340c7397e022fda3 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 16:00:14 +0100
+Subject: [PATCH] bb10: ignore the side keys while minimized (the button
+ service is system-wide)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi/input_bb10.lua | 24 +++++++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/ffi/input_bb10.lua b/ffi/input_bb10.lua
+index 2393f5fe..7517c880 100644
+--- a/ffi/input_bb10.lua
++++ b/ffi/input_bb10.lua
+@@ -113,12 +113,26 @@ local function screenEvent(event)
+     end
+ end
+ 
++-- Whether we're in the foreground (fullscreen & active): the button service is system-wide,
++-- so the side keys reach us even when minimized.
++local window_fullscreen, window_active = true, true
++
++local function inForeground()
++    return window_fullscreen and window_active
++end
++
+ local function navigatorEvent(event)
+     local code = bb10.bps.bps_event_get_code(event)
+     if code == C.NAVIGATOR_EXIT then
+         genEmuEvent(C.EV_MSC, input.MSC_EXIT, 0)
+     elseif code == C.NAVIGATOR_WINDOW_STATE then
+-        genEmuEvent(C.EV_MSC, input.MSC_WINDOW_STATE, bb10.bps.navigator_event_get_window_state(event))
++        local state = bb10.bps.navigator_event_get_window_state(event)
++        window_fullscreen = state == C.NAVIGATOR_WINDOW_FULLSCREEN
++        genEmuEvent(C.EV_MSC, input.MSC_WINDOW_STATE, state)
++    elseif code == C.NAVIGATOR_WINDOW_ACTIVE then
++        window_active = true
++    elseif code == C.NAVIGATOR_WINDOW_INACTIVE then
++        window_active = false
+     elseif code == C.NAVIGATOR_SWIPE_DOWN then
+         genEmuEvent(C.EV_MSC, input.MSC_SWIPE_DOWN, 0)
+     elseif code == C.NAVIGATOR_LOW_MEMORY then
+@@ -152,6 +166,10 @@ local side_keycodes = {
+ }
+ 
+ local function sideKeyEvents()
++    if not inForeground() then
++        bb10.side_keys = {}
++        return
++    end
+     for _, key in ipairs(bb10.side_keys) do
+         local code = side_keycodes[key]
+         if code then
+@@ -164,8 +182,8 @@ local function sideKeyEvents()
+ end
+ 
+ local function buttonEvent(event)
+-    if bb10.side_keys_fd then
+-        -- Grabbed: they come through PPS (see sideKeyEvents).
++    if bb10.side_keys_fd or not inForeground() then
++        -- Grabbed: they come through PPS (see sideKeyEvents). Or meant for another app.
+         return
+     end
+     local code = button_keycodes[tonumber(bb10.bps.button_event_get_button(event))]
+-- 
+2.56.0
+

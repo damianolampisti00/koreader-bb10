@@ -1,0 +1,20 @@
+From 487cf4e3a5800fc585d0284f83b052452eb9e242 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 16:00:14 +0100
+Subject: [PATCH] base: ignore the side keys while minimized
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ base | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/base b/base
+index 70b7053c6..df4704b6a 160000
+--- a/base
++++ b/base
+@@ -1 +1 @@
+-Subproject commit 70b7053c66bfd048b3e955187d2c9ff734d32574
++Subproject commit df4704b6a94f209bc7d925dc340c7397e022fda3
+-- 
+2.56.0
+

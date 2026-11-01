@@ -41,7 +41,7 @@ with base's patches + `patches/luajit/qnx-host-os.patch`.
     libbbmultimedia's MediaKeyWatcher): page turns without changing the system volume; released
     when minimized (the registration is system-wide while the fd is open).
 - Packaging: `scripts/build-koreader.sh` assembles the tree, `scripts/package-bar.sh <buildId>`
-  makes `bar/KOReader-<ver>.<id>-armv7.bar` (latest: 7) (launcher `platform/bb10/launcher.c`: KO_HOME in the
+  makes `bar/KOReader-<ver>.<id>-armv7.bar` (latest: 8) (launcher `platform/bb10/launcher.c`: KO_HOME in the
   sandbox's data/, log in logs/koreader.log). Install: `bb10-install <bar>` (phone unlocked).
 - More fixes found by using it: MuPDF fz_try broken by QNX's setjmp macros (double evaluation →
   "exception stack overflow!" on PDFs; `thirdparty/mupdf/bb10-setjmp.patch`), menu shortcuts
