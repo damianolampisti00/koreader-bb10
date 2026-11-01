@@ -1,60 +1,71 @@
-# KOReader → BlackBerry 10 (Q10) port
+# KOReader for BlackBerry 10
 
-Toolchain: BerryCore GCC 9.3.0 (`arm-blackberry-qnx8eabi`, softfp), from
-https://github.com/sw7ft/BerryCore/tree/main/toolchain
-(sha256 f8066a09cf285828a6d7a8358e6c6b381d72cfedbfcfe8c784bfcad1bf9fdada),
-extracted in `tc/gcc-9.3.0-berrycore`, mounted at `/opt/qnx800` in the
-local image `kobuild:trixie` (`docker build -t kobuild:trixie docker/`; never push it).
+An **unofficial** native port of [KOReader](https://github.com/koreader/koreader), the
+document viewer, to BlackBerry 10 phones. Developed and tested on a BlackBerry Q10
+(BB10 10.3, 720x720, physical keyboard).
 
-Sources: KOReader v2026.07.2 in `src/` (base 6e4bc81a), LuaJIT 3c4f9fe2 in `luajit/`
-with base's patches + `patches/luajit/qnx-host-os.patch`.
+> This port is not affiliated with or endorsed by the KOReader project. Please don't report
+> problems with it to KOReader: open an issue here instead. All the credit for KOReader
+> itself goes to its developers.
 
-## Status
-- Phase 1 (toolchain): C++17 smoke test runs on the Q10 with bundled
-  libstdc++.so.6 + libgcc_s.so.1 from GCC 9.3 (`tests/cxx17`).
-- Phase 2 (LuaJIT): `scripts/build-luajit.sh jit|nojit` → `out/luajit-*`.
-  On the Q10 (root, from shell): JIT on (ARMv7 VFPv3), FFI calls and callbacks OK,
-  hot loop 6.5 s JIT vs 13.4 s interpreter (`tests/luajit/ljtest.lua`).
-  Still to check: JIT inside an installed BAR (sandbox).
-- Phase 3 (koreader-base `TARGET=bb10`): builds completely (`scripts/build-base.sh`,
-  output in `src/base/build/arm-blackberry-qnx8eabi/{luajit,libs,common}`), and
-  `scripts/check-undef.sh` finds no unresolved symbols. Changes: branch `bb10` of
-  `src/base` (commit 7eadb6f8), exported as `patches/koreader-base/0001-Add-TARGET-bb10.patch`.
-  Key tricks:
-  - the GCC 9.3 specs put `-isystem $QNX_INC` first, so `QNX_INC=/opt/sysinc` points to
-    `sysinc/` (`scripts/make-sysinc.sh`): NDK headers minus the third-party libs we build,
-    with `math.h`/`xtgmath.h` fixed for libstdc++ (no Dinkum generic templates, `extern "C++"`);
-  - `-D_NO_CPP_INLINES` for C++ (Dinkum math overloads vs libstdc++ `<cmath>`);
-  - excluded for now: czmq/libzmq, sdcv/glib (dictionary), tar.
-  Still to check: loading every lib on the Q10 (`tests/base/dltest.lua`, phone was offline).
-- Phase 4 (FFI): `ffi/posix_h` gains `qnx_arm`, `ffi/bb10_h` covers libscreen/BPS/keycodes, both
-  generated with ffi-cdecl against the NDK headers (`scripts/build-host-tools.sh` once, then
-  `scripts/gen-ffi.sh`).
-- Phase 5 (device): `ffi/bb10.lua`, `ffi/framebuffer_bb10.lua`, `ffi/input_bb10.lua` (base) and
-  `frontend/device/bb10/` (koreader, branch `bb10`). KOReader v2026.07.2 starts on the Q10 from a
-  shell (`koreader.sh`, in /accounts/1000/shared/misc/kotest/koreader), JIT on, file manager &
-  quickstart shown. Crash found & fixed: SCREEN_PROPERTY_DPI writes an int *pair*.
-  Verified on the Q10 (as an installed app): touch, keyboard, colors, night mode, side keys.
-  - Side keys never come as keyboard events: BPS button service as fallback, and while in the
-    foreground they're "watched" on PPS /pps/services/multimedia/mediaplayer/control
-    (`msg::button` + `dat:json:{"key":"bn_vup_short","action":"forward"}`, reverse-engineered from
-    libbbmultimedia's MediaKeyWatcher): page turns without changing the system volume; released
-    when minimized (the registration is system-wide while the fd is open).
-- Packaging: `scripts/build-koreader.sh` assembles the tree, `scripts/package-bar.sh <buildId>`
-  makes `bar/KOReader-<ver>.<id>-armv7.bar` (latest: 6) (launcher `platform/bb10/launcher.c`: KO_HOME in the
-  sandbox's data/, log in logs/koreader.log). Install: `bb10-install <bar>` (phone unlocked).
-- More fixes found by using it: MuPDF fz_try broken by QNX's setjmp macros (double evaluation →
-  "exception stack overflow!" on PDFs; `thirdparty/mupdf/bb10-setjmp.patch`), menu shortcuts
-  without D-pad (`frontend/ui/widget/menu.lua`), Q10 Alt is not a modifier (symbols come resolved),
-  sym key 0xF0D3, freefont shipped (UI fallback glyphs).
-- Splash screen & active frame: `ffi/framebuffer_bb10.lua` shows `resources/bb10/splash-{light,dark}.png`
-  (made by `scripts/make-splash.py` at packaging time; dark in night mode) as soon as the window exists.
-  `frontend/device/bb10/cover.lua` renders the active frame (open book's cover + title + authors, else the
-  logo) to a PNG in the cache dir and hands it to the navigator (`navigator_window_cover_update`); fed by
-  `Device:notifyBookState`, `NAVIGATOR_WINDOW_COVER` and night mode changes. The navigator caches cover
-  images by path: a new file name each time.
-- BGR: MuPDF renders BGR (`Mupdf.bgr`), but TurboJPEG/giflib/lodepng (`ffi/pic`) gave RGB: `Pic.bgr`
-  (JPEG/GIF/PNG covers & images had red and blue swapped).
-- Patch series: `patches/koreader-base/` (vs tag base 6e4bc81a) and `patches/koreader/` (vs v2026.07.2).
+It's KOReader v2026.07.2 running natively (LuaJIT with the JIT enabled), not the Android
+version through the BB10 Android runtime.
 
-On the phone, test binaries live in /accounts/1000/shared/misc/kotest (not /tmp: noexec).
+## Features
+
+- The formats KOReader opens (tested most: EPUB and PDF).
+- Touch screen, physical keyboard (menu shortcuts, symbols with Alt), and the **volume
+  keys turn pages** while KOReader is in the foreground (the system volume is left alone).
+- Night mode, color covers and images.
+- Splash screen while loading (dark in night mode).
+- Active frame: the open book's cover, title and authors, or the KOReader logo.
+- OPDS catalogs (tested with calibre-web).
+
+Not yet: CJK/Arabic/Indic UI fonts, translations (the UI is in English), brightness
+control from KOReader, dictionaries (sdcv).
+
+## Installing
+
+BlackBerry's signing service has been shut down, so KOReader is packaged in development
+mode and has to be side-loaded on a phone in Development Mode
+(Settings > Security and Privacy > Development Mode). A ready-made `.bar` is attached to
+each [release](https://github.com/damianolampisti00/koreader-bb10/releases): install it
+with DBBT, Momentics, `blackberry-deploy`, or your usual side-loading tool.
+
+Books: KOReader starts in `/accounts/1000/shared` (the phone's shared storage: put them
+e.g. in `books/`). Settings and caches stay in the app's own data folder.
+
+## Building
+
+Needs a Linux x86_64 host with Docker, Python 3 with Pillow, and `rsvg-convert`.
+
+```
+scripts/setup.sh                 # toolchain, sources, build image (once)
+scripts/build-koreader.sh        # cross-compile koreader-base & assemble KOReader
+scripts/package-bar.sh 1         # → bar/KOReader-2026.7.2.1-armv7.bar
+```
+
+- **Toolchain**: the [BerryCore](https://github.com/sw7ft/BerryCore) GCC 9.3.0
+  (`arm-blackberry-qnx8eabi`). It runs only inside the `kobuild:trixie` image
+  (`docker/Dockerfile`), with the toolchain mounted at `/opt/qnx800`.
+- **Packaging** needs a Docker image with the BlackBerry 10 Native SDK 10.3
+  (`blackberry-nativepackager`): set `BBNDK_IMAGE` (e.g. `accupara/bbndk`, if still
+  available).
+- KOReader ships GCC 9.3's own `libstdc++`/`libgcc_s` (the BB10 system has Dinkum's C++
+  library only): the BAR is self-contained.
+
+## Sources
+
+- KOReader with the BB10 device: branch `bb10` of
+  [damianolampisti00/koreader](https://github.com/damianolampisti00/koreader/tree/bb10)
+  (on top of tag v2026.07.2).
+- koreader-base with `TARGET=bb10` (libscreen/BPS framebuffer & input, build system):
+  branch `bb10` of
+  [damianolampisti00/koreader-base](https://github.com/damianolampisti00/koreader-base/tree/bb10).
+- The same changes as patch series in `patches/`, against those upstream versions.
+- How the port works, and what was needed to make it work: [docs/NOTES.md](docs/NOTES.md).
+
+## License
+
+AGPL-3.0, like KOReader ([LICENSE](LICENSE)). The KOReader logo and name belong to the
+KOReader project; the bundled third-party libraries and fonts keep their own licenses.

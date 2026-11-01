@@ -2,6 +2,8 @@
 # Package the assembled KOReader tree (scripts/build-koreader.sh) as an unsigned -devMode BAR.
 # Usage: scripts/package-bar.sh <buildId>   → bar/KOReader-<version>.<buildId>-armv7.bar
 # Install with: bb10-install <bar>   (the phone must be unlocked)
+# Packaging needs a Docker image with the BlackBerry 10 Native SDK 10.3 (blackberry-nativepackager),
+# e.g. the public accupara/bbndk: BBNDK_IMAGE=accupara/bbndk scripts/package-bar.sh <buildId>
 set -euo pipefail
 K=$(cd "$(dirname "$0")/.." && pwd)
 BUILD_ID=${1:?usage: package-bar.sh <buildId>}
@@ -9,6 +11,7 @@ VERSION=2026.7.2
 TREE=$K/src/koreader-bb10-arm-blackberry-qnx8eabi/koreader
 STAGE=$K/bar/stage
 BAR=KOReader-$VERSION.$BUILD_ID-armv7.bar
+BBNDK_IMAGE=${BBNDK_IMAGE:-bbndk:accupara-2017}
 
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 
@@ -74,6 +77,6 @@ EOF
 
 # 4. Package with the BB10 NDK.
 docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$K/bar:$K/bar" -w "$STAGE" \
-    bbndk:accupara-2017 bash -c "blackberry-nativepackager -package ../$BAR bar-descriptor.xml -configuration Device-Release -devMode"
+    "$BBNDK_IMAGE" bash -c "blackberry-nativepackager -package ../$BAR bar-descriptor.xml -configuration Device-Release -devMode"
 ls -l "$K/bar/$BAR"
 echo "BAR: $K/bar/$BAR"

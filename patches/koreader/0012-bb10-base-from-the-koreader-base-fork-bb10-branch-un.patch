@@ -1,0 +1,42 @@
+From 8cbdaa49d60bda003dc07dda0cfd747c3c50b8b5 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 15:49:53 +0100
+Subject: [PATCH] bb10: base from the koreader-base fork (bb10 branch);
+ unofficial port in the BAR
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .gitmodules                         | 2 +-
+ platform/bb10/bar-descriptor.xml.in | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/.gitmodules b/.gitmodules
+index c7c668dcb..8eeabea7a 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -1,6 +1,6 @@
+ [submodule "koreader-base"]
+ 	path = base
+-	url = https://github.com/koreader/koreader-base.git
++	url = https://github.com/damianolampisti00/koreader-base.git
+ [submodule "platform/android/luajit-launcher"]
+ 	path = platform/android/luajit-launcher
+ 	url = https://github.com/koreader/android-luajit-launcher.git
+diff --git a/platform/bb10/bar-descriptor.xml.in b/platform/bb10/bar-descriptor.xml.in
+index 83d4d245a..2179f14a7 100644
+--- a/platform/bb10/bar-descriptor.xml.in
++++ b/platform/bb10/bar-descriptor.xml.in
+@@ -4,8 +4,8 @@
+     <name>KOReader</name>
+     <versionNumber>@VERSION@</versionNumber>
+     <buildId>@BUILD_ID@</buildId>
+-    <description>KOReader document viewer (BlackBerry 10 port)</description>
+-    <author>KOReader BB10 port</author>
++    <description>KOReader document viewer (unofficial BlackBerry 10 port)</description>
++    <author>KOReader BB10 port (unofficial)</author>
+     <initialWindow>
+         <autoOrients>false</autoOrients>
+         <systemChrome>none</systemChrome>
+-- 
+2.56.0
+
