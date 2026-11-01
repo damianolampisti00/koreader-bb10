@@ -21,6 +21,10 @@ for f in "$TREE"/fonts/noto/*; do
 done
 tar -C "$TREE/.." -chf - "${excludes[@]}" koreader | tar -C "$STAGE" -xf -
 
+# Splash screen (ffi/framebuffer_bb10.lua): the logo on white & on black (night mode).
+python3 -I "$K/scripts/make-splash.py" "$TREE/resources/koreader.svg" "$TREE/fonts/noto/NotoSans-Bold.ttf" \
+    "$STAGE/koreader/resources/bb10"
+
 # 2. The launcher (entry point).
 docker run --rm --network none \
     -v "$K/tc/gcc-9.3.0-berrycore:/opt/qnx800:ro" -v "$K/sysinc:/opt/sysinc:ro" \

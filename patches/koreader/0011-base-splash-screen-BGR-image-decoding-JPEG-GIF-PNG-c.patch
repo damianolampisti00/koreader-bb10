@@ -1,0 +1,55 @@
+From 77de2f3eab403f057d42c13054decf0feb5c4ab6 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 15:41:50 +0100
+Subject: [PATCH 11/11] base: splash screen, BGR image decoding (JPEG/GIF/PNG
+ covers had red & blue swapped)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ base                              | 2 +-
+ frontend/document/picdocument.lua | 1 +
+ frontend/ui/renderimage.lua       | 2 ++
+ 3 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/base b/base
+index 1d0a2f9bb..70b7053c6 160000
+--- a/base
++++ b/base
+@@ -1 +1 @@
+-Subproject commit 1d0a2f9bb9f03641059a34196955a2183c466c1d
++Subproject commit 70b7053c66bfd048b3e955187d2c9ff734d32574
+diff --git a/frontend/document/picdocument.lua b/frontend/document/picdocument.lua
+index 7c09ff7fc..87e08755e 100644
+--- a/frontend/document/picdocument.lua
++++ b/frontend/document/picdocument.lua
+@@ -16,6 +16,7 @@ function PicDocument:init()
+     if not pic then pic = require("ffi/pic") end
+     -- pic.color needs to be true before opening document to allow toggling color
+     pic.color = CanvasContext.is_color_rendering_enabled
++    pic.bgr = pic.color and CanvasContext.is_bgr
+     local ok
+     ok, self._document = pcall(pic.openDocument, self.file)
+     if not ok then
+diff --git a/frontend/ui/renderimage.lua b/frontend/ui/renderimage.lua
+index e6fd5e62c..ea4c10580 100644
+--- a/frontend/ui/renderimage.lua
++++ b/frontend/ui/renderimage.lua
+@@ -118,6 +118,7 @@ function RenderImage:renderJpegImageDataWithTurboJpeg(data, size, width, height)
+     end
+     if not Pic then Pic = require("ffi/pic") end
+     Pic.color = Device:hasColorScreen()
++    Pic.bgr = Pic.color and Device:hasBGRFrameBuffer()
+     local ok, jpeg = pcall(Pic.openJPGDocumentFromData, data, size)
+     if not ok then
+         logger.warn("failed rendering image (TurboJPEG):", jpeg)
+@@ -146,6 +147,7 @@ function RenderImage:renderGifImageDataWithGifLib(data, size, want_frames, width
+         return
+     end
+     if not Pic then Pic = require("ffi/pic") end
++    Pic.bgr = Device:hasColorScreen() and Device:hasBGRFrameBuffer()
+     local ok, gif = pcall(Pic.openGIFDocumentFromData, data, size)
+     logger.dbg("Pic.openGIFDocumentFromData", ok)
+     if not ok then
+-- 
+2.56.0
+

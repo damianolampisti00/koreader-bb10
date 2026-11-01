@@ -1,0 +1,213 @@
+From 984ff2688c91c8c4f6b588f852f14254e357447e Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 15:41:50 +0100
+Subject: [PATCH 8/9] bb10: splash screen, active frame (window cover) API
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi-cdecl/bb10_cdecl.c   | 14 ++++++++++++++
+ ffi/bb10.lua             | 18 ++++++++++++++++++
+ ffi/bb10_h.lua           | 19 +++++++++++++++++++
+ ffi/framebuffer_bb10.lua | 38 +++++++++++++++++++++++++++++++++++++-
+ ffi/input_bb10.lua       |  8 ++++++++
+ 5 files changed, 96 insertions(+), 1 deletion(-)
+
+diff --git a/ffi-cdecl/bb10_cdecl.c b/ffi-cdecl/bb10_cdecl.c
+index 39acd634..70142520 100644
+--- a/ffi-cdecl/bb10_cdecl.c
++++ b/ffi-cdecl/bb10_cdecl.c
+@@ -119,8 +119,13 @@ cdecl_const(NAVIGATOR_ORIENTATION_CHECK);
+ cdecl_const(NAVIGATOR_ORIENTATION);
+ cdecl_const(NAVIGATOR_LOW_MEMORY);
+ cdecl_const(NAVIGATOR_DEVICE_LOCK_STATE);
++cdecl_const(NAVIGATOR_WINDOW_COVER);
++cdecl_const(NAVIGATOR_WINDOW_COVER_ENTER);
++cdecl_const(NAVIGATOR_WINDOW_COVER_EXIT);
+ 
+ cdecl_type(navigator_window_state_t);
++cdecl_type(navigator_window_cover_transition_t);
++cdecl_type(navigator_window_cover_attribute_t);
+ 
+ cdecl_func(navigator_request_events);
+ cdecl_func(navigator_stop_events);
+@@ -131,6 +136,15 @@ cdecl_func(navigator_rotation_lock);
+ cdecl_func(navigator_invoke);
+ cdecl_func(navigator_close_window);
+ cdecl_func(navigator_extend_terminate);
++cdecl_func(navigator_event_get_window_cover_width);
++cdecl_func(navigator_event_get_window_cover_height);
++cdecl_func(navigator_window_cover_attribute_create);
++cdecl_func(navigator_window_cover_attribute_destroy);
++cdecl_func(navigator_window_cover_attribute_set_file);
++cdecl_func(navigator_window_cover_attribute_set_transition);
++cdecl_func(navigator_window_cover_attribute_set_allow_badges);
++cdecl_func(navigator_window_cover_update);
++cdecl_func(navigator_window_cover_reset);
+ 
+ cdecl_const(BUTTON_UP);
+ cdecl_const(BUTTON_DOWN);
+diff --git a/ffi/bb10.lua b/ffi/bb10.lua
+index c8aaed2e..6fb8d998 100644
+--- a/ffi/bb10.lua
++++ b/ffi/bb10.lua
+@@ -171,6 +171,24 @@ function bb10.getBatteryInfo()
+     return capacity >= 0 and capacity or nil, charging ~= C.BATTERY_CHARGING_NOT_CHARGING and charging ~= C.BATTERY_CHARGING_DONE_CHARGING, plugged
+ end
+ 
++--- Active frame ("window cover") size, from the navigator's NAVIGATOR_WINDOW_COVER event.
++bb10.cover_width, bb10.cover_height = 310, 211 -- Q10/Q5 default
++
++--- Show the image `file` (absolute path) as our active frame, instead of a live thumbnail of the window.
++function bb10.setCover(file)
++    local B = bb10.bps
++    local attr = ffi.new("navigator_window_cover_attribute_t *[1]")
++    if B.navigator_window_cover_attribute_create(attr) ~= C.BPS_SUCCESS then
++        return false
++    end
++    local ok = B.navigator_window_cover_attribute_set_file(attr[0], file) == C.BPS_SUCCESS
++        and B.navigator_window_cover_attribute_set_transition(attr[0], C.NAVIGATOR_WINDOW_COVER_TRANSITION_FADE) == C.BPS_SUCCESS
++        and B.navigator_window_cover_update(attr[0]) == C.BPS_SUCCESS
++    local err = not ok and ffi.string(C.strerror(ffi.errno())) or nil
++    B.navigator_window_cover_attribute_destroy(attr[0])
++    return ok, err
++end
++
+ function bb10.openLink(uri)
+     return bb10.bps.navigator_invoke(uri, nil) == C.BPS_SUCCESS
+ end
+diff --git a/ffi/bb10_h.lua b/ffi/bb10_h.lua
+index 73f0bd2a..b2acddf1 100644
+--- a/ffi/bb10_h.lua
++++ b/ffi/bb10_h.lua
+@@ -96,11 +96,21 @@ static const unsigned NAVIGATOR_ORIENTATION_CHECK = 7;
+ static const unsigned NAVIGATOR_ORIENTATION = 8;
+ static const unsigned NAVIGATOR_LOW_MEMORY = 6;
+ static const unsigned NAVIGATOR_DEVICE_LOCK_STATE = 26;
++static const unsigned NAVIGATOR_WINDOW_COVER = 27;
++static const unsigned NAVIGATOR_WINDOW_COVER_ENTER = 28;
++static const unsigned NAVIGATOR_WINDOW_COVER_EXIT = 29;
+ typedef enum {
+   NAVIGATOR_WINDOW_FULLSCREEN = 0,
+   NAVIGATOR_WINDOW_THUMBNAIL = 1,
+   NAVIGATOR_WINDOW_INVISIBLE = 2,
+ } navigator_window_state_t;
++typedef enum {
++  NAVIGATOR_WINDOW_COVER_TRANSITION_DEFAULT = 0,
++  NAVIGATOR_WINDOW_COVER_TRANSITION_NONE = 1,
++  NAVIGATOR_WINDOW_COVER_TRANSITION_SLIDE = 2,
++  NAVIGATOR_WINDOW_COVER_TRANSITION_FADE = 3,
++} navigator_window_cover_transition_t;
++typedef struct navigator_window_cover_attribute_t navigator_window_cover_attribute_t;
+ int navigator_request_events(int);
+ int navigator_stop_events(int);
+ int navigator_get_domain();
+@@ -110,6 +120,15 @@ int navigator_rotation_lock(bool);
+ int navigator_invoke(const char *, char **);
+ int navigator_close_window(void);
+ int navigator_extend_terminate(void);
++int navigator_event_get_window_cover_width(bps_event_t *);
++int navigator_event_get_window_cover_height(bps_event_t *);
++int navigator_window_cover_attribute_create(navigator_window_cover_attribute_t **);
++int navigator_window_cover_attribute_destroy(navigator_window_cover_attribute_t *);
++int navigator_window_cover_attribute_set_file(navigator_window_cover_attribute_t *, const char *);
++int navigator_window_cover_attribute_set_transition(navigator_window_cover_attribute_t *, int);
++int navigator_window_cover_attribute_set_allow_badges(navigator_window_cover_attribute_t *, bool);
++int navigator_window_cover_update(navigator_window_cover_attribute_t *);
++int navigator_window_cover_reset(void);
+ static const unsigned BUTTON_UP = 0;
+ static const unsigned BUTTON_DOWN = 1;
+ typedef enum {
+diff --git a/ffi/framebuffer_bb10.lua b/ffi/framebuffer_bb10.lua
+index 8eea37d8..016bc512 100644
+--- a/ffi/framebuffer_bb10.lua
++++ b/ffi/framebuffer_bb10.lua
+@@ -1,8 +1,36 @@
+ local BB = require("ffi/blitbuffer")
+ local bb10 = require("ffi/bb10")
++local ffi = require("ffi")
++local C = ffi.C
+ 
+ local framebuffer = {}
+ 
++--- Splash screen, shown in the window until KOReader's first refresh: the logo
++-- (resources/bb10/splash-*.png, made by the port's scripts/make-splash.py) centered
++-- on white, or on black in night mode.
++local function showSplash(bb)
++    local night = G_reader_settings and G_reader_settings:isTrue("night_mode")
++    bb:fill(night and BB.COLOR_BLACK or BB.COLOR_WHITE)
++    local ok, Png = pcall(require, "ffi/png")
++    local decoded, img
++    if ok then
++        decoded, img = Png.decodeFromFile("resources/bb10/splash-" .. (night and "dark" or "light") .. ".png", 3)
++    end
++    if decoded then
++        -- The window is BGRX: swap red & blue.
++        local p = ffi.cast("uint8_t *", img.data)
++        for i = 0, img.width * img.height * 3 - 1, 3 do
++            p[i], p[i + 2] = p[i + 2], p[i]
++        end
++        local logo = BB.new(img.width, img.height, BB.TYPE_BBRGB24, img.data)
++        bb:blitFrom(logo, math.floor((bb10.width - img.width) / 2), math.floor((bb10.height - img.height) / 2),
++                    0, 0, img.width, img.height)
++        logo:free()
++        C.free(img.data)
++    end
++    bb10.post()
++end
++
+ function framebuffer:init()
+     bb10.init()
+     -- The libscreen window buffer (RGBX8888, i.e., BGRX in memory: see Device.hasBGRFrameBuffer).
+@@ -14,7 +42,7 @@ function framebuffer:init()
+     if bb10.dpi and not self.dpi then
+         self.dpi = bb10.dpi
+     end
+-    self:_updateWindow()
++    showSplash(self.window_bb)
+     framebuffer.parent.init(self)
+ end
+ 
+@@ -29,6 +57,14 @@ function framebuffer:_updateWindow()
+     bb10.post()
+ end
+ 
++-- The active frame (device/bb10/cover) follows night mode too.
++function framebuffer:toggleNightMode()
++    framebuffer.parent.toggleNightMode(self)
++    if self.onNightModeChanged then
++        self.onNightModeChanged(self.night_mode)
++    end
++end
++
+ function framebuffer:refreshFullImp(x, y, w, h) -- luacheck: ignore
+     self:_updateWindow()
+ end
+diff --git a/ffi/input_bb10.lua b/ffi/input_bb10.lua
+index 8e975154..2393f5fe 100644
+--- a/ffi/input_bb10.lua
++++ b/ffi/input_bb10.lua
+@@ -26,6 +26,7 @@ local input = {
+     MSC_SWIPE_DOWN = 3,
+     MSC_LOW_MEMORY = 4,
+     MSC_DEVICE_LOCK = 5,
++    MSC_WINDOW_COVER = 6, -- the active frame's size is in bb10.cover_width/cover_height
+ }
+ 
+ local inputQueue = {}
+@@ -122,6 +123,13 @@ local function navigatorEvent(event)
+         genEmuEvent(C.EV_MSC, input.MSC_SWIPE_DOWN, 0)
+     elseif code == C.NAVIGATOR_LOW_MEMORY then
+         genEmuEvent(C.EV_MSC, input.MSC_LOW_MEMORY, 0)
++    elseif code == C.NAVIGATOR_WINDOW_COVER then
++        local w = bb10.bps.navigator_event_get_window_cover_width(event)
++        local h = bb10.bps.navigator_event_get_window_cover_height(event)
++        if w > 0 and h > 0 then
++            bb10.cover_width, bb10.cover_height = w, h
++        end
++        genEmuEvent(C.EV_MSC, input.MSC_WINDOW_COVER, 0)
+     elseif code == C.NAVIGATOR_DEVICE_LOCK_STATE then
+         genEmuEvent(C.EV_MSC, input.MSC_DEVICE_LOCK, 0)
+     elseif code == C.NAVIGATOR_ORIENTATION_CHECK then
+-- 
+2.56.0
+
