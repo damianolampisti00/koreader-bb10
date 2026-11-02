@@ -1,0 +1,183 @@
+From 492e0791de03c8d89548a6b3d43892adcb882c0e Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 01:30:55 +0100
+Subject: [PATCH] bb10: middle side key as media play/pause (also in the
+ background); side keys follow the screen state
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ffi/bb10.lua       | 68 ++++++++++++++++++++++++++++++++++++----------
+ ffi/input_bb10.lua | 30 ++++++++++----------
+ 2 files changed, 69 insertions(+), 29 deletions(-)
+
+diff --git a/ffi/bb10.lua b/ffi/bb10.lua
+index 6fb8d998..f1ab177e 100644
+--- a/ffi/bb10.lua
++++ b/ffi/bb10.lua
+@@ -100,10 +100,22 @@ end
+ 
+ -- Side keys "watched" like bb::multimedia::MediaKeyWatcher does: while registered, their presses
+ -- come to us (as `msg::key\ndat::bn_<key>_short`) instead of changing the system volume.
+--- NOTE: that's system-wide, so only grab them while we're in the foreground.
++-- NOTE: that's system-wide, so only grab them while we're in the foreground (all of them),
++-- or while the middle key is used as a media play/pause key (see setMediaPlayPause).
+ local MEDIA_KEYS_PPS = "/pps/services/multimedia/mediaplayer/control"
+ local SIDE_KEYS = { "vup", "vdown", "playpause" }
+ 
++--- Whether our window is fullscreen & active (the screen is on): set by ffi/input_bb10.
++bb10.window_fullscreen, bb10.window_active = true, true
++
++function bb10.inForeground()
++    return bb10.window_fullscreen and bb10.window_active
++end
++
++--- While true, the middle side key is a media play/pause key, even in the background
++-- (e.g., read aloud): ffi/input_bb10 turns it into an EV_MSC MSC_MEDIA_PLAYPAUSE event.
++bb10.media_playpause = false
++
+ --- Side key presses received through PPS (key names: "vup", "vdown", "playpause").
+ bb10.side_keys = {}
+ 
+@@ -127,25 +139,51 @@ local side_keys_handler = ffi.cast("int (*)(int, int, void *)", function(fd)
+     return C.BPS_SUCCESS
+ end)
+ 
+-function bb10.grabSideKeys(grab)
+-    if grab and not bb10.side_keys_fd then
+-        local fd = C.open(MEDIA_KEYS_PPS, C.O_RDWR)
+-        if fd < 0 then
+-            return false
+-        end
+-        for _, key in ipairs(SIDE_KEYS) do
+-            local msg = string.format('msg::button\nid::%s\ndat:json:{"key":"bn_%s_short","action":"forward"}\n', key, key)
+-            C.write(fd, msg, #msg)
+-        end
+-        bb10.bps.bps_add_fd(fd, C.BPS_IO_INPUT, side_keys_handler, nil)
+-        bb10.side_keys_fd = fd
+-    elseif not grab and bb10.side_keys_fd then
++--- Grab `keys`: a list of side keys ("vup", "vdown", "playpause"), true for all, false for none.
++function bb10.grabSideKeys(keys)
++    if keys == true then
++        keys = SIDE_KEYS
++    end
++    local wanted = keys and table.concat(keys, ",") or ""
++    if wanted == (bb10.side_keys_grabbed or "") then
++        return bb10.side_keys_fd ~= nil
++    end
++    if bb10.side_keys_fd then
+         -- Closing the PPS connection drops our registrations.
+         bb10.bps.bps_remove_fd(bb10.side_keys_fd)
+         C.close(bb10.side_keys_fd)
+         bb10.side_keys_fd = nil
+     end
+-    return bb10.side_keys_fd ~= nil
++    bb10.side_keys_grabbed = nil
++    if wanted == "" then
++        return false
++    end
++    local fd = C.open(MEDIA_KEYS_PPS, C.O_RDWR)
++    if fd < 0 then
++        return false
++    end
++    for _, key in ipairs(keys) do
++        local msg = string.format('msg::button\nid::%s\ndat:json:{"key":"bn_%s_short","action":"forward"}\n', key, key)
++        C.write(fd, msg, #msg)
++    end
++    bb10.bps.bps_add_fd(fd, C.BPS_IO_INPUT, side_keys_handler, nil)
++    bb10.side_keys_fd = fd
++    bb10.side_keys_grabbed = wanted
++    return true
++end
++
++--- Grab the side keys that are ours now: all of them in the foreground, else only the middle
++-- one while it's a media play/pause key.
++function bb10.updateSideKeys()
++    if bb10.inForeground() then
++        return bb10.grabSideKeys(true)
++    end
++    return bb10.grabSideKeys(bb10.media_playpause and { "playpause" } or false)
++end
++
++function bb10.setMediaPlayPause(on)
++    bb10.media_playpause = on and true or false
++    bb10.updateSideKeys()
+ end
+ 
+ function bb10.setKeepAwake(keep_awake)
+diff --git a/ffi/input_bb10.lua b/ffi/input_bb10.lua
+index 7517c880..05403b7b 100644
+--- a/ffi/input_bb10.lua
++++ b/ffi/input_bb10.lua
+@@ -27,6 +27,8 @@ local input = {
+     MSC_LOW_MEMORY = 4,
+     MSC_DEVICE_LOCK = 5,
+     MSC_WINDOW_COVER = 6, -- the active frame's size is in bb10.cover_width/cover_height
++    MSC_WINDOW_ACTIVE = 7, -- value: 1 active (e.g., screen on), 0 inactive
++    MSC_MEDIA_PLAYPAUSE = 8, -- the middle side key, while bb10.media_playpause
+ }
+ 
+ local inputQueue = {}
+@@ -115,11 +117,7 @@ end
+ 
+ -- Whether we're in the foreground (fullscreen & active): the button service is system-wide,
+ -- so the side keys reach us even when minimized.
+-local window_fullscreen, window_active = true, true
+-
+-local function inForeground()
+-    return window_fullscreen and window_active
+-end
++local inForeground = bb10.inForeground
+ 
+ local function navigatorEvent(event)
+     local code = bb10.bps.bps_event_get_code(event)
+@@ -127,12 +125,14 @@ local function navigatorEvent(event)
+         genEmuEvent(C.EV_MSC, input.MSC_EXIT, 0)
+     elseif code == C.NAVIGATOR_WINDOW_STATE then
+         local state = bb10.bps.navigator_event_get_window_state(event)
+-        window_fullscreen = state == C.NAVIGATOR_WINDOW_FULLSCREEN
++        bb10.window_fullscreen = state == C.NAVIGATOR_WINDOW_FULLSCREEN
+         genEmuEvent(C.EV_MSC, input.MSC_WINDOW_STATE, state)
+     elseif code == C.NAVIGATOR_WINDOW_ACTIVE then
+-        window_active = true
++        bb10.window_active = true
++        genEmuEvent(C.EV_MSC, input.MSC_WINDOW_ACTIVE, 1)
+     elseif code == C.NAVIGATOR_WINDOW_INACTIVE then
+-        window_active = false
++        bb10.window_active = false
++        genEmuEvent(C.EV_MSC, input.MSC_WINDOW_ACTIVE, 0)
+     elseif code == C.NAVIGATOR_SWIPE_DOWN then
+         genEmuEvent(C.EV_MSC, input.MSC_SWIPE_DOWN, 0)
+     elseif code == C.NAVIGATOR_LOW_MEMORY then
+@@ -166,13 +166,11 @@ local side_keycodes = {
+ }
+ 
+ local function sideKeyEvents()
+-    if not inForeground() then
+-        bb10.side_keys = {}
+-        return
+-    end
+     for _, key in ipairs(bb10.side_keys) do
+         local code = side_keycodes[key]
+-        if code then
++        if key == "playpause" and bb10.media_playpause then
++            genEmuEvent(C.EV_MSC, input.MSC_MEDIA_PLAYPAUSE, 0)
++        elseif code and inForeground() then
+             -- PPS only reports clicks.
+             genEmuEvent(C.EV_KEY, code, 1)
+             genEmuEvent(C.EV_KEY, code, 0)
+@@ -187,7 +185,11 @@ local function buttonEvent(event)
+         return
+     end
+     local code = button_keycodes[tonumber(bb10.bps.button_event_get_button(event))]
+-    if code then
++    if code == C.KEYCODE_PLAY and bb10.media_playpause then
++        if bb10.bps.bps_event_get_code(event) == C.BUTTON_DOWN then
++            genEmuEvent(C.EV_MSC, input.MSC_MEDIA_PLAYPAUSE, 0)
++        end
++    elseif code then
+         genEmuEvent(C.EV_KEY, code, bb10.bps.bps_event_get_code(event) == C.BUTTON_DOWN and 1 or 0)
+     end
+ end
+-- 
+2.56.0
+
