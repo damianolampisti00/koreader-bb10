@@ -1,0 +1,52 @@
+From 4c65e2c65503132cf71489f4b3ca4ba7fbcc2fe9 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 10:17:55 +0100
+Subject: [PATCH 17/18] bb10 cover: keep the active-frame PNGs in
+ cache/bb10-cover/
+
+DocCache treats every plain file in cache/ as one of its items. Once
+cover.lua deleted an older PNG, DocCache:serialize() (on closing a book,
+e.g. Menu > File browser) got a nil access time and crashed in its sort.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ frontend/device/bb10/cover.lua | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/frontend/device/bb10/cover.lua b/frontend/device/bb10/cover.lua
+index 97c81a9f6..057bb1f68 100644
+--- a/frontend/device/bb10/cover.lua
++++ b/frontend/device/bb10/cover.lua
+@@ -142,7 +142,20 @@ function Cover:update()
+     end
+     local ok, err = pcall(function()
+         local bb = self:_render(w, h, night)
+-        local dir = DataStorage:getDataDir() .. "/cache"
++        -- Own subdirectory: DocCache treats every plain file in cache/ as one of its items,
++        -- and a PNG we delete behind its back made DocCache:serialize() crash on close.
++        local lfs = require("libs/libkoreader-lfs")
++        local cache = DataStorage:getDataDir() .. "/cache"
++        local dir = cache .. "/bb10-cover"
++        if lfs.attributes(dir, "mode") ~= "directory" then
++            lfs.mkdir(dir)
++            -- Leftovers of older builds, which wrote them straight into cache/.
++            for name in lfs.dir(cache) do
++                if name:match("^bb10%-cover%-.*%.png$") then
++                    os.remove(cache .. "/" .. name)
++                end
++            end
++        end
+         self.file_serial = self.file_serial + 1
+         local file = string.format("%s/bb10-cover-%d-%d.png", dir, os.time(), self.file_serial)
+         -- Our color buffers are BGR (Device:hasBGRFrameBuffer).
+@@ -154,7 +167,6 @@ function Cover:update()
+             error("navigator_window_cover_update: " .. tostring(set_err))
+         end
+         -- Drop the older ones (also those left by previous runs).
+-        local lfs = require("libs/libkoreader-lfs")
+         for name in lfs.dir(dir) do
+             if name:match("^bb10%-cover%-.*%.png$") and dir .. "/" .. name ~= file then
+                 os.remove(dir .. "/" .. name)
+-- 
+2.56.0
+

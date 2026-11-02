@@ -1,0 +1,45 @@
+From 6e2d677c3f2c4dbca81ca065706feef99b927ec3 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 10:27:04 +0100
+Subject: [PATCH 18/18] DocCache:serialize: skip cache files that vanished
+ since the snapshot
+
+A file deleted after the snapshot gave a nil access time, which made
+table.sort crash when closing a book.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ frontend/document/doccache.lua | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/frontend/document/doccache.lua b/frontend/document/doccache.lua
+index e62ed780c..1b06804c3 100644
+--- a/frontend/document/doccache.lua
++++ b/frontend/document/doccache.lua
+@@ -66,8 +66,12 @@ function DocCache:serialize(doc_path)
+     local cached_size = 0
+     local sorted_caches = {}
+     for _, file in pairs(self.cached) do
+-        table.insert(sorted_caches, {file=file, time=lfs.attributes(file, "access")})
+-        cached_size = cached_size + (lfs.attributes(file, "size") or 0)
++        -- Skip files removed since the snapshot was taken (a nil time would break the sort).
++        local attr = lfs.attributes(file)
++        if attr then
++            table.insert(sorted_caches, {file=file, time=attr.access, size=attr.size})
++            cached_size = cached_size + attr.size
++        end
+     end
+     table.sort(sorted_caches, function(v1, v2) return v1.time > v2.time end)
+ 
+@@ -107,7 +111,7 @@ function DocCache:serialize(doc_path)
+         -- discard the least recently used cache
+         local discarded = table.remove(sorted_caches)
+         if discarded then
+-            cached_size = cached_size - lfs.attributes(discarded.file, "size")
++            cached_size = cached_size - discarded.size
+             os.remove(discarded.file)
+         else
+             logger.warn("Cache accounting is broken")
+-- 
+2.56.0
+
