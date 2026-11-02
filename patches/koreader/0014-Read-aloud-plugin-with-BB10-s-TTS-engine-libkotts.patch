@@ -1,0 +1,802 @@
+From eeb72706ffac46b944b8a7699bb3a6fe8e1fba10 Mon Sep 17 00:00:00 2001
+From: Damiano Lampisti <35961105+damianolampisti00@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 01:01:50 +0100
+Subject: [PATCH] Read aloud plugin, with BB10's TTS engine (libkotts)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ frontend/ui/elements/reader_menu_order.lua |   1 +
+ platform/bb10/bar-descriptor.xml.in        |   2 +
+ platform/bb10/kotts.c                      | 294 ++++++++++++++
+ plugins/readaloud.koplugin/_meta.lua       |   6 +
+ plugins/readaloud.koplugin/main.lua        | 441 +++++++++++++++++++++
+ 5 files changed, 744 insertions(+)
+ create mode 100644 platform/bb10/kotts.c
+ create mode 100644 plugins/readaloud.koplugin/_meta.lua
+ create mode 100644 plugins/readaloud.koplugin/main.lua
+
+diff --git a/frontend/ui/elements/reader_menu_order.lua b/frontend/ui/elements/reader_menu_order.lua
+index 131c3d709..4ed4e334d 100644
+--- a/frontend/ui/elements/reader_menu_order.lua
++++ b/frontend/ui/elements/reader_menu_order.lua
+@@ -174,6 +174,7 @@ local order = {
+         "long_press",
+     },
+     tools = {
++        "read_aloud",
+         "read_timer",
+         "calibre",
+         "exporter",
+diff --git a/platform/bb10/bar-descriptor.xml.in b/platform/bb10/bar-descriptor.xml.in
+index 2179f14a7..12634d423 100644
+--- a/platform/bb10/bar-descriptor.xml.in
++++ b/platform/bb10/bar-descriptor.xml.in
+@@ -23,4 +23,6 @@
+     <permission system="true">run_native</permission>
+     <permission>access_shared</permission>
+     <permission>access_internet</permission>
++    <!-- Read aloud goes on with the screen off / minimized. -->
++    <permission>run_when_backgrounded</permission>
+ </qnx>
+diff --git a/platform/bb10/kotts.c b/platform/bb10/kotts.c
+new file mode 100644
+index 000000000..f76ff42e2
+--- /dev/null
++++ b/platform/bb10/kotts.c
+@@ -0,0 +1,294 @@
++/*
++ * libkotts: text-to-speech for KOReader on BlackBerry 10, through the system's private TTS
++ * engine (libttsengine.so.1 → Nuance Vocalizer Expressive, the voices of BB10's screen reader
++ * and Assistant). There's no public API: the prototypes were reverse-engineered from
++ * libasr-nuance_tts-prompt.so, the system's "prompt" service.
++ *
++ * ttsStartText2Speech blocks until the text is spoken, so a worker thread speaks a queue of
++ * utterances. The Lua side (plugins/readaloud.koplugin) enqueues them, and polls for their
++ * start/end events: no Lua ever runs on the worker thread.
++ */
++#include <dlfcn.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++/* Passed as-is to Nuance's ve_ttsSetParamList (VE_PARAM). */
++typedef struct {
++    int id;
++    union {
++        uint16_t u;
++        char s[128];
++    } v;
++} tts_param_t;
++
++/* Parameter ids, found by synthesizing to files. */
++enum { TTS_VOLUME = 2, TTS_RATE = 3, TTS_PITCH = 4, TTS_VOICE = 8 };
++
++enum { KOTTS_STARTED = 1, KOTTS_DONE = 2, KOTTS_FAILED = 3, KOTTS_CANCELED = 4 };
++
++typedef struct {
++    int id;
++    int what;
++} kotts_event_t;
++
++struct item {
++    int id;
++    uint16_t *text;
++    size_t bytes;
++    struct item *next;
++};
++
++static int (*ttsInitialize)(const char *);
++static int (*ttsOpenInstance)(tts_param_t *, int);
++static int (*ttsSetParams)(tts_param_t *, int);
++static int (*ttsStartText2Speech)(const uint16_t *, size_t, const char *, int, int);
++static int (*ttsStopText2Speech)(void);
++static int (*ttsUnInitialize)(void);
++
++static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
++static pthread_t worker;
++static void *engine;
++static int running;
++static struct item *head, *tail;
++static int speaking = -1;              /* id being spoken, or -1 */
++static tts_param_t pending[3];         /* parameter changes, applied between utterances */
++static int npending;
++#define MAX_EVENTS 64
++static kotts_event_t events[MAX_EVENTS];
++static int nevents;
++
++static void push_event(int id, int what)
++{
++    if (nevents < MAX_EVENTS) {
++        events[nevents].id = id;
++        events[nevents].what = what;
++        nevents++;
++    }
++}
++
++static uint16_t *utf8_to_utf16(const char *in, size_t *bytes)
++{
++    const unsigned char *p = (const unsigned char *)in;
++    uint16_t *out = malloc((strlen(in) + 1) * 2 * sizeof *out), *o = out;
++    if (!out)
++        return NULL;
++    while (*p) {
++        uint32_t c = *p++;
++        if (c >= 0xC0 && c < 0xE0 && (p[0] & 0xC0) == 0x80) {
++            c = ((c & 0x1F) << 6) | (p[0] & 0x3F);
++            p += 1;
++        } else if (c >= 0xE0 && c < 0xF0 && (p[0] & 0xC0) == 0x80 && (p[1] & 0xC0) == 0x80) {
++            c = ((c & 0x0F) << 12) | ((p[0] & 0x3F) << 6) | (p[1] & 0x3F);
++            p += 2;
++        } else if (c >= 0xF0 && c < 0xF8 && (p[0] & 0xC0) == 0x80 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
++            c = ((c & 0x07) << 18) | ((p[0] & 0x3F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
++            p += 3;
++        } else if (c >= 0x80) {
++            c = 0xFFFD;
++        }
++        if (c >= 0x10000) {
++            c -= 0x10000;
++            *o++ = (uint16_t)(0xD800 | (c >> 10));
++            *o++ = (uint16_t)(0xDC00 | (c & 0x3FF));
++        } else {
++            *o++ = (uint16_t)c;
++        }
++    }
++    *o = 0;
++    *bytes = (size_t)(o - out) * 2;
++    return out;
++}
++
++static void *work(void *arg)
++{
++    (void)arg;
++    pthread_mutex_lock(&lock);
++    while (running) {
++        if (npending) {
++            tts_param_t p[3];
++            int n = npending;
++            memcpy(p, pending, sizeof p);
++            npending = 0;
++            pthread_mutex_unlock(&lock);
++            ttsSetParams(p, n);
++            pthread_mutex_lock(&lock);
++            continue;
++        }
++        if (!head) {
++            pthread_cond_wait(&wake, &lock);
++            continue;
++        }
++        struct item *it = head;
++        head = it->next;
++        if (!head)
++            tail = NULL;
++        speaking = it->id;
++        push_event(it->id, KOTTS_STARTED);
++        pthread_mutex_unlock(&lock);
++
++        int ret = ttsStartText2Speech(it->text, it->bytes, NULL, 0, 0);
++
++        pthread_mutex_lock(&lock);
++        /* kotts_stop() sets speaking to -1 when it interrupts us. */
++        push_event(it->id, speaking == -1 ? KOTTS_CANCELED : ret == 0 ? KOTTS_DONE : KOTTS_FAILED);
++        speaking = -1;
++        free(it->text);
++        free(it);
++    }
++    pthread_mutex_unlock(&lock);
++    return NULL;
++}
++
++static void set_param(tts_param_t *p, int id, int value)
++{
++    memset(p, 0, sizeof *p);
++    p->id = id;
++    p->v.u = (uint16_t)value;
++}
++
++/* data: the voices' directory (NULL: /usr/tts/nuance/ve/data). voice: e.g. "alice".
++ * rate (50–400), pitch (50–200), volume (0–100): percents, 100 = default.
++ * Returns 0, or a negative error (-1: no engine, -2: init, -3: voice, -4: thread). */
++int kotts_init(const char *data, const char *voice, int rate, int pitch, int volume)
++{
++    if (running)
++        return 0;
++    if (!engine) {
++        engine = dlopen("libttsengine.so.1", RTLD_NOW | RTLD_LOCAL);
++        if (!engine)
++            return -1;
++        ttsInitialize = (int (*)(const char *))dlsym(engine, "ttsInitialize");
++        ttsOpenInstance = (int (*)(tts_param_t *, int))dlsym(engine, "ttsOpenInstance");
++        ttsSetParams = (int (*)(tts_param_t *, int))dlsym(engine, "ttsSetParams");
++        ttsStartText2Speech = (int (*)(const uint16_t *, size_t, const char *, int, int))dlsym(engine, "ttsStartText2Speech");
++        ttsStopText2Speech = (int (*)(void))dlsym(engine, "ttsStopText2Speech");
++        ttsUnInitialize = (int (*)(void))dlsym(engine, "ttsUnInitialize");
++        if (!ttsInitialize || !ttsOpenInstance || !ttsSetParams || !ttsStartText2Speech
++                || !ttsStopText2Speech || !ttsUnInitialize) {
++            dlclose(engine);
++            engine = NULL;
++            return -1;
++        }
++    }
++    if (ttsInitialize(data ? data : "/usr/tts/nuance/ve/data") != 0)
++        return -2;
++    tts_param_t p[4];
++    memset(p, 0, sizeof p);
++    p[0].id = TTS_VOICE;
++    strncpy(p[0].v.s, voice && *voice ? voice : "alice", sizeof p[0].v.s - 1);
++    set_param(&p[1], TTS_RATE, rate);
++    set_param(&p[2], TTS_PITCH, pitch);
++    set_param(&p[3], TTS_VOLUME, volume);
++    if (ttsOpenInstance(p, 4) != 0) {
++        ttsUnInitialize();
++        return -3;
++    }
++    running = 1;
++    nevents = 0;
++    if (pthread_create(&worker, NULL, work, NULL) != 0) {
++        running = 0;
++        ttsUnInitialize();
++        return -4;
++    }
++    return 0;
++}
++
++/* Change the rate/pitch/volume (percents, 0 = unchanged), from the next utterance. */
++void kotts_set_params(int rate, int pitch, int volume)
++{
++    pthread_mutex_lock(&lock);
++    npending = 0;
++    if (rate)
++        set_param(&pending[npending++], TTS_RATE, rate);
++    if (pitch)
++        set_param(&pending[npending++], TTS_PITCH, pitch);
++    if (volume)
++        set_param(&pending[npending++], TTS_VOLUME, volume);
++    pthread_cond_signal(&wake);
++    pthread_mutex_unlock(&lock);
++}
++
++/* Queue an utterance (UTF-8). Returns 0, or -1. */
++int kotts_speak(int id, const char *text)
++{
++    struct item *it = calloc(1, sizeof *it);
++    if (!it)
++        return -1;
++    it->id = id;
++    it->text = utf8_to_utf16(text, &it->bytes);
++    if (!it->text) {
++        free(it);
++        return -1;
++    }
++    pthread_mutex_lock(&lock);
++    if (!running) {
++        pthread_mutex_unlock(&lock);
++        free(it->text);
++        free(it);
++        return -1;
++    }
++    if (tail)
++        tail->next = it;
++    else
++        head = it;
++    tail = it;
++    pthread_cond_signal(&wake);
++    pthread_mutex_unlock(&lock);
++    return 0;
++}
++
++/* Drop the queue and interrupt the current utterance (its event is KOTTS_CANCELED). */
++void kotts_stop(void)
++{
++    pthread_mutex_lock(&lock);
++    while (head) {
++        struct item *it = head;
++        head = it->next;
++        push_event(it->id, KOTTS_CANCELED);
++        free(it->text);
++        free(it);
++    }
++    tail = NULL;
++    int interrupt = speaking != -1;
++    speaking = -1;
++    pthread_mutex_unlock(&lock);
++    if (interrupt)
++        ttsStopText2Speech();
++}
++
++/* Events since the last call (up to max), oldest first. Returns their number. */
++int kotts_poll(kotts_event_t *out, int max)
++{
++    pthread_mutex_lock(&lock);
++    int n = nevents < max ? nevents : max;
++    memcpy(out, events, n * sizeof *out);
++    memmove(events, events + n, (nevents - n) * sizeof *events);
++    nevents -= n;
++    pthread_mutex_unlock(&lock);
++    return n;
++}
++
++/* Whether something is being spoken or queued. */
++int kotts_busy(void)
++{
++    pthread_mutex_lock(&lock);
++    int busy = speaking != -1 || head != NULL;
++    pthread_mutex_unlock(&lock);
++    return busy;
++}
++
++void kotts_shutdown(void)
++{
++    if (!running)
++        return;
++    kotts_stop();
++    pthread_mutex_lock(&lock);
++    running = 0;
++    pthread_cond_signal(&wake);
++    pthread_mutex_unlock(&lock);
++    pthread_join(worker, NULL);
++    ttsUnInitialize();
++}
+diff --git a/plugins/readaloud.koplugin/_meta.lua b/plugins/readaloud.koplugin/_meta.lua
+new file mode 100644
+index 000000000..a31da6a07
+--- /dev/null
++++ b/plugins/readaloud.koplugin/_meta.lua
+@@ -0,0 +1,6 @@
++local _ = require("gettext")
++return {
++    name = "readaloud",
++    fullname = _("Read aloud"),
++    description = _([[Reads the book aloud with the device's text-to-speech voice (BlackBerry 10), turning the pages.]]),
++}
+diff --git a/plugins/readaloud.koplugin/main.lua b/plugins/readaloud.koplugin/main.lua
+new file mode 100644
+index 000000000..e5dd06a2c
+--- /dev/null
++++ b/plugins/readaloud.koplugin/main.lua
+@@ -0,0 +1,441 @@
++--[[--
++Read aloud: speaks the book sentence by sentence with the device's text-to-speech engine,
++and turns the pages along.
++
++The engine is BlackBerry 10's (libs/libkotts.so, see platform/bb10/kotts.c): it speaks a queue
++of utterances on its own thread, and we poll it for their start & end. Two sentences are kept
++queued, so that there's no gap between them.
++
++@module koplugin.readaloud
++]]
++
++local Device = require("device")
++
++if not (Device.isBB10 and Device:isBB10()) then
++    return { disabled = true }
++end
++
++local Dispatcher = require("dispatcher")
++local Event = require("ui/event")
++local UIManager = require("ui/uimanager")
++local WidgetContainer = require("ui/widget/container/widgetcontainer")
++local ffi = require("ffi")
++local logger = require("logger")
++local util = require("util")
++local _ = require("gettext")
++local T = require("ffi/util").template
++
++ffi.cdef[[
++typedef struct { int id; int what; } kotts_event_t;
++int kotts_init(const char *, const char *, int, int, int);
++void kotts_set_params(int, int, int);
++int kotts_speak(int, const char *);
++void kotts_stop(void);
++int kotts_poll(kotts_event_t *, int);
++void kotts_shutdown(void);
++]]
++
++local KOTTS_STARTED, KOTTS_DONE, KOTTS_FAILED, KOTTS_CANCELED = 1, 2, 3, 4
++local VOICES_DIR = "/usr/tts/nuance/ve/data"
++local POLL_INTERVAL = 0.25
++local IN_FLIGHT = 2        -- utterances handed to the engine at once
++local MAX_SENTENCE = 300   -- bytes: longer sentences are split at commas or spaces
++
++-- The engine is shared by all the reader instances (one per opened book).
++local engine = {
++    lib = nil,
++    ready = false,
++    error = nil,
++    events = ffi.new("kotts_event_t[64]"),
++}
++
++--- The voice set in the system's settings: the only one whose data is mounted (e.g. ITI/alice).
++local function systemVoice()
++    local lfs = require("libs/libkoreader-lfs")
++    local ok, iter, dir_obj = pcall(lfs.dir, VOICES_DIR)
++    if ok then
++        for lang in iter, dir_obj do
++            if lang ~= "." and lang ~= ".." and lang ~= "common" then
++                for voice in lfs.dir(VOICES_DIR .. "/" .. lang) do
++                    if voice ~= "." and voice ~= ".." then
++                        return voice, lang
++                    end
++                end
++            end
++        end
++    end
++    return "alice", "ITI"
++end
++
++local function startEngine(rate, pitch)
++    if engine.ready then
++        return true
++    end
++    if not engine.lib then
++        local ok, lib = pcall(ffi.load, "libs/libkotts.so")
++        if not ok then
++            engine.error = tostring(lib)
++            return false
++        end
++        engine.lib = lib
++    end
++    engine.voice, engine.language = systemVoice()
++    local ret = engine.lib.kotts_init(nil, engine.voice, rate, pitch, 100)
++    if ret ~= 0 then
++        engine.error = T("kotts_init: %1", ret)
++        logger.warn("ReadAloud: engine init failed:", ret)
++        return false
++    end
++    engine.ready = true
++    return true
++end
++
++-- Words ending with a period that don't end a sentence (lowercase).
++local ABBREVIATIONS = {}
++for w in ("sig sigg sig.ra sig.na dott dott.ssa prof prof.ssa avv ing arch geom rag on sen mons "
++        .. "dr mr mrs ms st jr sr vs etc ecc cfr pag pagg vol cap fig ca"):gmatch("%S+") do
++    ABBREVIATIONS[w] = true
++end
++
++--- Text cleanup, then sentences (with no sentence longer than MAX_SENTENCE).
++local function splitSentences(text)
++    text = text:gsub("\u{00AD}", "")       -- soft hyphens
++               :gsub("…", "...")
++               :gsub("%s+", " ")
++    -- Closing quotes & brackets before the final punctuation, so that it's followed by a space.
++    for _ = 1, 2 do
++        for _, q in ipairs({ "\"", "'", "”", "’", "»", ")", "]" }) do
++            text = text:gsub("([%.!?]+)" .. q:gsub("%p", "%%%0"), q .. "%1")
++        end
++    end
++    local sentences = {}
++    local function add(s)
++        s = util.trim(s)
++        if s == "" then return end
++        while #s > MAX_SENTENCE do
++            local cut = s:sub(1, MAX_SENTENCE):match("^.*[,;:]() ") or s:sub(1, MAX_SENTENCE):match("^.* ()")
++            if not cut or cut < 40 then break end
++            table.insert(sentences, util.trim(s:sub(1, cut - 1)))
++            s = util.trim(s:sub(cut))
++        end
++        table.insert(sentences, s)
++    end
++    local start = 1
++    local pos = 1
++    while true do
++        -- End of sentence: . ! ? followed by a space and not by a lowercase letter (abbreviations).
++        local a, b = text:find("[%.!?]+ ", pos)
++        if not a then break end
++        local next_char = text:sub(b + 1, b + 1)
++        local word = text:sub(start, a):match("([%w%.]+)%.$")
++        local abbreviation = word and text:sub(a, b) == ". "
++            and (ABBREVIATIONS[word:lower()] or word:match("^%a$"))
++        if not next_char:match("%l") and not abbreviation then
++            add(text:sub(start, b))
++            start = b + 1
++        end
++        pos = b + 1
++    end
++    local rest = text:sub(start)
++    -- Whether the text ends a sentence (else, its last piece goes on in the next page).
++    local complete = rest:match("^%s*$") ~= nil or rest:match("[%.!?]%s*$") ~= nil
++    add(rest)
++    return sentences, complete
++end
++
++local ReadAloud = WidgetContainer:extend{
++    name = "readaloud",
++    is_doc_only = true,
++}
++
++function ReadAloud:init()
++    self.rate = G_reader_settings:readSetting("readaloud_rate", 100)
++    self.pitch = G_reader_settings:readSetting("readaloud_pitch", 100)
++    self.state = "stopped" -- or "reading", "paused"
++    self.next_id = 0
++    self.poll_task = function() self:poll() end
++    Dispatcher:registerAction("readaloud_toggle", {
++        category = "none", event = "ReadAloudToggle", title = _("Read aloud: start/pause"), reader = true,
++    })
++    Dispatcher:registerAction("readaloud_stop", {
++        category = "none", event = "ReadAloudStop", title = _("Read aloud: stop"), reader = true,
++    })
++    self.ui.menu:registerToMainMenu(self)
++end
++
++--- Text of a page: for reflowable documents (crengine) between this page's & the next one's
++-- xpointers, else the page's text boxes (PDF, DjVu).
++function ReadAloud:getPageText(page)
++    local doc = self.ui.document
++    if self.ui.rolling then
++        local xp0 = doc:getPageXPointer(page)
++        if not xp0 then return "" end
++        local xp1 = page < doc:getPageCount() and doc:getPageXPointer(page + 1)
++        if not xp1 then
++            -- Last page: up to the last word.
++            xp1 = xp0
++            for _ = 1, 20000 do
++                local xp = doc:getNextVisibleWordEnd(xp1)
++                if not xp or xp == xp1 then break end
++                xp1 = xp
++            end
++        end
++        return doc:getTextFromXPointers(xp0, xp1) or ""
++    end
++    local ok, boxes = pcall(doc.getPageTextBoxes, doc, page)
++    if not ok or type(boxes) ~= "table" then return "" end
++    local words = {}
++    for _, line in ipairs(boxes) do
++        for _, word in ipairs(line) do
++            if word.word then table.insert(words, word.word) end
++        end
++    end
++    -- Words hyphenated at the end of a line.
++    return (table.concat(words, " "):gsub("(%a)%- (%l)", "%1%2"))
++end
++
++--- Load the sentences of `page` (following a sentence begun on the previous page, `carry`).
++function ReadAloud:loadPage(page, carry, first)
++    local text = self:getPageText(page)
++    local sentences, complete = splitSentences((carry or "") .. " " .. text)
++    self.page = page
++    self.sentences = {}
++    for i, s in ipairs(sentences) do
++        -- The page is turned when its first sentence starts (or the one after the sentence
++        -- begun on the previous page).
++        local turn = (i == 1 and not carry) or (i == 2 and carry ~= nil)
++        table.insert(self.sentences, { text = s, page = page, turn = turn, index = i })
++    end
++    self.carry = nil
++    if not complete and page < self.ui.document:getPageCount() and #self.sentences > 0 then
++        self.carry = table.remove(self.sentences).text
++    end
++    self.index = first or 1
++end
++
++function ReadAloud:nextSentence()
++    while self.index > #self.sentences do
++        if self.page >= self.ui.document:getPageCount() then
++            return nil
++        end
++        self:loadPage(self.page + 1, self.carry)
++    end
++    local s = self.sentences[self.index]
++    self.index = self.index + 1
++    return s
++end
++
++function ReadAloud:feed()
++    while self.in_flight_count < IN_FLIGHT do
++        local s = self:nextSentence()
++        if not s then break end
++        self.next_id = self.next_id + 1
++        if engine.lib.kotts_speak(self.next_id, s.text) ~= 0 then
++            logger.warn("ReadAloud: kotts_speak failed")
++            break
++        end
++        self.in_flight[self.next_id] = s
++        self.in_flight_count = self.in_flight_count + 1
++    end
++end
++
++function ReadAloud:poll()
++    if self.state ~= "reading" then return end
++    local n = engine.lib.kotts_poll(engine.events, 64)
++    for i = 0, n - 1 do
++        local id, what = engine.events[i].id, engine.events[i].what
++        local s = self.in_flight[id]
++        if s then
++            if what == KOTTS_STARTED then
++                self.current = s
++                if s.turn and s.page ~= self.ui:getCurrentPage() then
++                    self.turning = true
++                    self.ui:handleEvent(Event:new("GotoPage", s.page))
++                    self.turning = false
++                end
++            else
++                self.in_flight[id] = nil
++                self.in_flight_count = self.in_flight_count - 1
++                if what == KOTTS_FAILED then
++                    logger.warn("ReadAloud: failed to speak:", s.text)
++                end
++            end
++        end
++    end
++    if self.state ~= "reading" then return end
++    self:feed()
++    if self.in_flight_count == 0 then
++        -- The end of the book.
++        self:stop()
++        return
++    end
++    UIManager:scheduleIn(POLL_INTERVAL, self.poll_task)
++end
++
++function ReadAloud:_cancel()
++    UIManager:unschedule(self.poll_task)
++    if engine.ready then
++        engine.lib.kotts_stop()
++        engine.lib.kotts_poll(engine.events, 64) -- drop the events of what we canceled
++    end
++    self.in_flight = {}
++    self.in_flight_count = 0
++end
++
++--- Start reading at `page` (default: the current one), from its `first` sentence.
++function ReadAloud:start(page, first)
++    if not startEngine(self.rate, self.pitch) then
++        local InfoMessage = require("ui/widget/infomessage")
++        UIManager:show(InfoMessage:new{
++            text = T(_("Text-to-speech isn't available:\n%1"), engine.error or "?"),
++        })
++        return
++    end
++    self:_cancel()
++    self:loadPage(page or self.ui:getCurrentPage(), nil, first)
++    self.current = nil
++    self.state = "reading"
++    self:feed()
++    UIManager:scheduleIn(POLL_INTERVAL, self.poll_task)
++end
++
++function ReadAloud:pause()
++    if self.state ~= "reading" then return end
++    -- Resume with the sentence being spoken.
++    local s = self.current
++    self.resume_at = s and { page = s.page, index = s.index } or { page = self.page, index = 1 }
++    self:_cancel()
++    self.state = "paused"
++end
++
++function ReadAloud:resume()
++    local at = self.resume_at
++    self.resume_at = nil
++    if at and at.page == self.ui:getCurrentPage() then
++        self:start(at.page, at.index)
++    else
++        self:start()
++    end
++end
++
++function ReadAloud:stop()
++    self:_cancel()
++    self.state = "stopped"
++    self.resume_at = nil
++    self.current = nil
++end
++
++function ReadAloud:onReadAloudToggle()
++    if self.state == "reading" then
++        self:pause()
++    elseif self.state == "paused" then
++        self:resume()
++    else
++        self:start()
++    end
++    return true
++end
++
++function ReadAloud:onReadAloudStop()
++    self:stop()
++    return true
++end
++
++-- Pages turned by hand: go on reading from there.
++function ReadAloud:onPageUpdate(page)
++    if self.state == "reading" and not self.turning and page ~= (self.current and self.current.page) then
++        UIManager:nextTick(function()
++            if self.state == "reading" then
++                self:start(self.ui:getCurrentPage())
++            end
++        end)
++    end
++end
++
++function ReadAloud:onCloseDocument()
++    self:stop()
++end
++
++function ReadAloud:onCloseWidget()
++    self:stop()
++end
++
++function ReadAloud:setParam(key, value)
++    self[key] = value
++    G_reader_settings:saveSetting("readaloud_" .. key, value)
++    if engine.ready then
++        engine.lib.kotts_set_params(key == "rate" and value or 0, key == "pitch" and value or 0, 0)
++    end
++end
++
++function ReadAloud:showSpin(key, title, min, max)
++    local SpinWidget = require("ui/widget/spinwidget")
++    UIManager:show(SpinWidget:new{
++        title_text = title,
++        value = self[key],
++        value_min = min,
++        value_max = max,
++        value_step = 10,
++        value_hold_step = 50,
++        default_value = 100,
++        unit = "%",
++        callback = function(spin)
++            self:setParam(key, spin.value)
++        end,
++    })
++end
++
++function ReadAloud:addToMainMenu(menu_items)
++    menu_items.read_aloud = {
++        sorting_hint = "tools",
++        text = _("Read aloud"),
++        sub_item_table = {
++            {
++                text_func = function()
++                    if self.state == "reading" then return _("Pause") end
++                    if self.state == "paused" then return _("Resume") end
++                    return _("Start reading from this page")
++                end,
++                callback = function(touchmenu_instance)
++                    touchmenu_instance:closeMenu()
++                    self:onReadAloudToggle()
++                end,
++            },
++            {
++                text = _("Stop"),
++                enabled_func = function() return self.state ~= "stopped" end,
++                callback = function(touchmenu_instance)
++                    touchmenu_instance:closeMenu()
++                    self:stop()
++                end,
++                separator = true,
++            },
++            {
++                text_func = function() return T(_("Speed: %1 %"), self.rate) end,
++                keep_menu_open = true,
++                callback = function(touchmenu_instance)
++                    self:showSpin("rate", _("Speech speed"), 50, 300)
++                    touchmenu_instance:updateItems()
++                end,
++            },
++            {
++                text_func = function() return T(_("Pitch: %1 %"), self.pitch) end,
++                keep_menu_open = true,
++                callback = function(touchmenu_instance)
++                    self:showSpin("pitch", _("Voice pitch"), 50, 200)
++                    touchmenu_instance:updateItems()
++                end,
++                separator = true,
++            },
++            {
++                text_func = function()
++                    local voice = engine.voice or systemVoice()
++                    return T(_("Voice: %1 (set in the BlackBerry settings)"), voice:gsub("^%l", string.upper))
++                end,
++                enabled = false,
++            },
++        },
++    }
++end
++
++return ReadAloud
+-- 
+2.56.0
+

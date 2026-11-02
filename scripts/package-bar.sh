@@ -34,7 +34,9 @@ docker run --rm --network none \
     -v "$K/scripts:/scripts:ro" -v "$K/src/platform/bb10:/src:ro" -v "$STAGE:/out" \
     kobuild:trixie bash -c '. /scripts/gcc9-env.sh; export QNX_INC=/opt/sysinc;
         $QNX_ABI-gcc -O2 -march=armv7-a -mthumb -mfloat-abi=softfp -mfpu=neon -fPIE -pie -static-libgcc -Wall \
-            /src/launcher.c -o /out/koreader-launcher && $QNX_ABI-strip /out/koreader-launcher'
+            /src/launcher.c -o /out/koreader-launcher && $QNX_ABI-strip /out/koreader-launcher &&
+        $QNX_ABI-gcc -O2 -march=armv7-a -mthumb -mfloat-abi=softfp -mfpu=neon -fPIC -shared -Wall \
+            -Wl,-soname,libkotts.so /src/kotts.c -o /out/koreader/libs/libkotts.so && $QNX_ABI-strip /out/koreader/libs/libkotts.so'
 
 cp "$TREE/resources/koreader.png" "$STAGE/icon.png"
 
