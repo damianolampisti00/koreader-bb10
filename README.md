@@ -22,6 +22,8 @@ version through the BB10 Android runtime.
 - **Read aloud** (Tools > Read aloud): the book is read with the phone's own offline voice
   (the Nuance voice set in Settings > Language and Input > Text-to-Speech, e.g. Alice for
   Italian), sentence by sentence, turning the pages; speed and pitch can be changed.
+  The middle side key plays/pauses, also with the screen off. The voice follows the book's
+  language, among the voices available (see below).
 - OPDS catalogs (tested with calibre-web).
 
 Not yet: CJK/Arabic/Indic UI fonts, translations (the UI is in English), brightness
@@ -37,6 +39,20 @@ with DBBT, Momentics, `blackberry-deploy`, or your usual side-loading tool.
 
 Books: KOReader starts in `/accounts/1000/shared` (the phone's shared storage: put them
 e.g. in `books/`). Settings and caches stay in the app's own data folder.
+
+### More voices for read aloud (root)
+
+BB10 ships 19 Nuance voices (Alice, Ava, Kate, Thomas, Anna, Marisol…) but mounts only the one
+selected in its settings, and the engine looks for voices in a fixed place. On a rooted phone,
+`tools/ttsvoices-start.sh` mounts the others (read-only, like the system does): run it as root,
+or install it as a boot addon:
+
+```
+mkdir -p /var/addons/ttsvoices/init
+cp ttsvoices-start.sh /var/addons/ttsvoices/init/start.sh && chmod 755 /var/addons/ttsvoices/init/start.sh
+```
+
+Undo: `rm -r /var/addons/ttsvoices`, then reboot.
 
 ## Building
 
