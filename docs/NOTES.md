@@ -41,7 +41,7 @@ with base's patches + `patches/luajit/qnx-host-os.patch`.
     libbbmultimedia's MediaKeyWatcher): page turns without changing the system volume; released
     when minimized (the registration is system-wide while the fd is open).
 - Packaging: `scripts/build-koreader.sh` assembles the tree, `scripts/package-bar.sh <buildId>`
-  makes `bar/KOReader-<ver>.<id>-armv7.bar` (latest: 8) (launcher `platform/bb10/launcher.c`: KO_HOME in the
+  makes `bar/KOReader-<ver>.<id>-armv7.bar` (latest: 9) (launcher `platform/bb10/launcher.c`: KO_HOME in the
   sandbox's data/, log in logs/koreader.log). Install: `bb10-install <bar>` (phone unlocked).
 - More fixes found by using it: MuPDF fz_try broken by QNX's setjmp macros (double evaluation →
   "exception stack overflow!" on PDFs; `thirdparty/mupdf/bb10-setjmp.patch`), menu shortcuts
@@ -55,6 +55,13 @@ with base's patches + `patches/luajit/qnx-host-os.patch`.
   images by path: a new file name each time.
 - BGR: MuPDF renders BGR (`Mupdf.bgr`), but TurboJPEG/giflib/lodepng (`ffi/pic`) gave RGB: `Pic.bgr`
   (JPEG/GIF/PNG covers & images had red and blue swapped).
+- Read aloud: BB10's TTS engine has no public API. `libttsengine.so.1` (Nuance Vocalizer Expressive,
+  used by the screen reader & Assistant) was probed from its caller `libasr-nuance_tts-prompt.so`:
+  `ttsInitialize("/usr/tts/nuance/ve/data")`, `ttsOpenInstance(VE_PARAM[], n)` (id 8 voice name,
+  2 volume, 3 rate, 4 pitch: found by synthesizing to files), `ttsStartText2Speech(utf16, bytes,
+  out_file_or_NULL, 0, 0)` (blocking), `ttsStopText2Speech()`. `platform/bb10/kotts.c` (libkotts)
+  speaks a queue on a worker thread; `plugins/readaloud.koplugin` polls it. Probes in `tests/tts/`.
+  Only the voice selected in the system settings is mounted under /usr/tts/nuance/ve/data.
 - Patch series: `patches/koreader-base/` (vs tag base 6e4bc81a) and `patches/koreader/` (vs v2026.07.2).
 
 On the phone, test binaries live in /accounts/1000/shared/misc/kotest (not /tmp: noexec).

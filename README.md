@@ -19,6 +19,9 @@ version through the BB10 Android runtime.
 - Night mode, color covers and images.
 - Splash screen while loading (dark in night mode).
 - Active frame: the open book's cover, title and authors, or the KOReader logo.
+- **Read aloud** (Tools > Read aloud): the book is read with the phone's own offline voice
+  (the Nuance voice set in Settings > Language and Input > Text-to-Speech, e.g. Alice for
+  Italian), sentence by sentence, turning the pages; speed and pitch can be changed.
 - OPDS catalogs (tested with calibre-web).
 
 Not yet: CJK/Arabic/Indic UI fonts, translations (the UI is in English), brightness
